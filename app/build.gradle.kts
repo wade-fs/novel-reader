@@ -16,9 +16,20 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        create("release") {
+            keyAlias = System.getenv("SIGNING_KEY_ALIAS") ?: System.getenv("KEY_ALIAS") ?: "androidapk"
+            keyPassword = System.getenv("SIGNING_KEY_PASSWORD") ?: System.getenv("KEY_PASSWORD") ?: "jjchen"
+            val keyPath = System.getenv("SIGNING_KEY_FILE") ?: System.getenv("KEY_FILE") ?: "/home/wade/.ssh/androidapk.jks"
+            storeFile = file(keyPath)
+            storePassword = System.getenv("SIGNING_STORE_PASSWORD") ?: System.getenv("STORE_PASSWORD") ?: "jjchen"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
