@@ -22,7 +22,7 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="匯入小說 (GitHub 網址或本機檔案)"
+            android:text="匯入小說 (網路小說 / GitHub / 本機)"
             android:textColor="@color/text_primary"
             android:textSize="18sp"
             android:textStyle="bold" />
@@ -31,7 +31,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
-            android:text="不寫死任何內容，可直接貼上 GitHub 專案目錄網址或單一章節網址，自動抓取並建立索引朗讀。"
+            android:text="支援貼上小說網站（飄天文學、小說狂人、UU看書等）或 GitHub 網址；若網站需驗證將自動開啟內建防廣告瀏覽器。"
             android:textColor="@color/text_secondary"
             android:textSize="13sp"
             android:lineSpacingExtra="2dp" />
@@ -54,7 +54,7 @@
                 android:id="@+id/etGithubUrl"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:hint="貼上 GitHub 網址 (tree 目錄或 blob 章節)..."
+                android:hint="貼上小說網站網址或 GitHub 網址..."
                 android:textSize="13sp"
                 android:maxLines="3"
                 android:inputType="textUri" />
@@ -73,7 +73,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="範例捷徑："
+                android:text="快速範例："
                 android:textColor="@color/text_secondary"
                 android:textSize="12sp" />
 
@@ -97,19 +97,35 @@
             android:layout_marginTop="4dp">
 
             <com.google.android.material.chip.Chip
+                android:id="@+id/chipExamplePiaotia"
+                style="@style/Widget.Material3.Chip.Suggestion"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="飄天：奧術神座"
+                android:textSize="12sp" />
+
+            <com.google.android.material.chip.Chip
+                android:id="@+id/chipExampleCzbooks"
+                style="@style/Widget.Material3.Chip.Suggestion"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="小說狂人 (czbooks)"
+                android:textSize="12sp" />
+
+            <com.google.android.material.chip.Chip
+                android:id="@+id/chipExampleUukanshu"
+                style="@style/Widget.Material3.Chip.Suggestion"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="UU看書 (uukanshu)"
+                android:textSize="12sp" />
+
+            <com.google.android.material.chip.Chip
                 android:id="@+id/chipExampleYuanTree"
                 style="@style/Widget.Material3.Chip.Suggestion"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="元末明初全本 (/yuan)"
-                android:textSize="12sp" />
-
-            <com.google.android.material.chip.Chip
-                android:id="@+id/chipExampleYuanChap1"
-                style="@style/Widget.Material3.Chip.Suggestion"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="元末第1章 (chap001.md)"
+                android:text="GitHub (/yuan)"
                 android:textSize="12sp" />
 
             <com.google.android.material.chip.Chip
@@ -117,7 +133,7 @@
                 style="@style/Widget.Material3.Chip.Suggestion"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="宋末全本 (/song)"
+                android:text="GitHub (/song)"
                 android:textSize="12sp" />
 
             <com.google.android.material.chip.Chip
@@ -125,7 +141,7 @@
                 style="@style/Widget.Material3.Chip.Suggestion"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="萬界風月樓 (/sex)"
+                android:text="GitHub (/sex)"
                 android:textSize="12sp" />
 
         </com.google.android.material.chip.ChipGroup>
@@ -136,10 +152,21 @@
             android:layout_width="match_parent"
             android:layout_height="48dp"
             android:layout_marginTop="16dp"
-            android:text="從 GitHub 下載並開始朗讀"
+            android:text="抓取並加入書單朗讀"
             android:backgroundTint="@color/primary"
             android:textColor="@android:color/white"
             app:cornerRadius="24dp" />
+
+        <!-- 直接用內建防廣告瀏覽器開啟 -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnOpenWebBrowser"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="44dp"
+            android:layout_marginTop="8dp"
+            android:text="以內建防廣告瀏覽器開啟網頁"
+            android:textSize="13sp"
+            app:cornerRadius="22dp" />
 
         <View
             android:layout_width="match_parent"
@@ -207,7 +234,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
-                android:text="正在連線下載中..."
+                android:text="正在連線抓取中..."
                 android:textColor="@color/primary"
                 android:textSize="13sp" />
 

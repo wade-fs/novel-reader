@@ -5,7 +5,8 @@ enum class BookSourceType(val displayLabel: String) {
     GITHUB_TREE("GitHub"),
     GITHUB_SINGLE("GitHub 單章"),
     LOCAL_ARCHIVE("壓縮檔"),
-    LOCAL_DIRECTORY("本機目錄")
+    LOCAL_DIRECTORY("本機目錄"),
+    WEB_NOVEL("網路小說")
 }
 
 data class BookEntry(

@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@color/bg_card">
+
+    <!-- 頂部控制列 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingHorizontal="8dp"
+        android:background="@color/bg_paper">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnWebBack"
+            style="@style/Widget.Material3.Button.IconButton"
+            android:layout_width="38dp"
+            android:layout_height="38dp"
+            android:contentDescription="上一頁"
+            app:icon="@android:drawable/ic_media_previous"
+            app:iconTint="@color/text_primary" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnWebReload"
+            style="@style/Widget.Material3.Button.IconButton"
+            android:layout_width="38dp"
+            android:layout_height="38dp"
+            android:contentDescription="重新整理"
+            app:icon="@android:drawable/ic_popup_sync"
+            app:iconTint="@color/text_primary" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginHorizontal="6dp"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/tvWebBrowserTitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="內建防廣告瀏覽器"
+                android:textColor="@color/text_primary"
+                android:textSize="14sp"
+                android:textStyle="bold"
+                android:maxLines="1"
+                android:ellipsize="end" />
+
+            <TextView
+                android:id="@+id/tvWebAdBlockStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="已啟用彈窗與廣告攔截"
+                android:textColor="@color/primary"
+                android:textSize="11sp"
+                android:maxLines="1"
+                android:ellipsize="end" />
+        </LinearLayout>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnWebClose"
+            style="@style/Widget.Material3.Button.IconButton"
+            android:layout_width="38dp"
+            android:layout_height="38dp"
+            android:contentDescription="關閉"
+            app:icon="@android:drawable/ic_menu_close_clear_cancel"
+            app:iconTint="@color/text_primary" />
+    </LinearLayout>
+
+    <ProgressBar
+        android:id="@+id/progressWebLoad"
+        style="?android:attr/progressBarStyleHorizontal"
+        android:layout_width="match_parent"
+        android:layout_height="3dp"
+        android:max="100"
+        android:visibility="gone" />
+
+    <!-- WebView 容器 -->
+    <WebView
+        android:id="@+id/webViewNovel"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/divider" />
+
+    <!-- 底部狀態與匯入列 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="12dp"
+        android:background="@color/bg_paper">
+
+        <TextView
+            android:id="@+id/tvWebDetectStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="正在載入網頁，若出現驗證請在上方畫面完成..."
+            android:textColor="@color/text_secondary"
+            android:textSize="12sp"
+            android:maxLines="2"
+            android:ellipsize="end" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnWebImportCurrent"
+            android:layout_width="match_parent"
+            android:layout_height="44dp"
+            android:layout_marginTop="8dp"
+            android:text="匯入此頁面小說並開始朗讀"
+            android:backgroundTint="@color/primary"
+            android:textColor="@android:color/white"
+            app:cornerRadius="22dp" />
+    </LinearLayout>
+
+</LinearLayout>

@@ -36,6 +36,7 @@ import com.novel.reader.util.BookLibraryManager
 import com.novel.reader.util.GitHubLoadResult
 import com.novel.reader.util.ReadingProgressManager
 import com.novel.reader.util.SavedReadingProgress
+import com.novel.reader.util.WebBookImportResult
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -447,6 +448,12 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
             onImportSuccess = { result ->
                 handleGitHubImportSuccess(result)
             },
+            onWebBookImported = { result ->
+                handleWebBookImportSuccess(result)
+            },
+            onOpenWebBrowser = { url ->
+                openWebNovelBrowserForImport(url)
+            },
             onPickArchive = {
                 openArchiveLauncher.launch(arrayOf(
                     "application/zip",
@@ -462,6 +469,49 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
             }
         )
         sheet.show(supportFragmentManager, "ImportSheet")
+    }
+
+    private fun openWebNovelBrowserForImport(url: String) {
+        val browser = WebNovelBrowserDialogFragment(
+            initialUrl = url,
+            mode = WebNovelBrowserDialogFragment.Mode.IMPORT_BOOK,
+            onBookImported = { result ->
+                handleWebBookImportSuccess(result)
+            }
+        )
+        browser.show(supportFragmentManager, "WebNovelBrowser")
+    }
+
+    private fun handleWebBookImportSuccess(result: WebBookImportResult.Success) {
+        val now = System.currentTimeMillis()
+        val entry = BookEntry(
+            id = result.bookId,
+            title = result.title,
+            sourceType = BookSourceType.WEB_NOVEL,
+            localPath = result.localDirPath,
+            sourceUriOrUrl = result.sourceUrl,
+            chapterCount = result.chapters.size,
+            addedAt = now,
+            lastOpenedAt = now
+        )
+        bookLibraryManager.addOrUpdateBook(entry)
+        bookLibraryManager.markOpened(entry.id)
+
+        val saved = progressManager.getSavedProgressForBook(entry.id)
+        val targetIdx = saved?.chapterIndex?.coerceIn(result.chapters.indices) ?: 0
+        val targetSeg = saved?.segmentIndex ?: 0
+
+        binding.toolbar.title = entry.title
+        ttsService?.setChapterList(
+            list = result.chapters,
+            initialIndex = targetIdx,
+            initialSegmentIndex = targetSeg,
+            startPlay = true,
+            novelId = entry.id,
+            novelTitle = entry.title,
+            webBookDir = File(result.localDirPath),
+            preferWebView = result.preferWebView
+        )
     }
 
     private fun handleGitHubImportSuccess(result: GitHubLoadResult.Success) {
@@ -605,6 +655,9 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
 
     private fun openBookEntry(entry: BookEntry, autoPlay: Boolean) {
         lifecycleScope.launch {
+            var webBookDir: File? = null
+            var preferWebView = false
+
             val chapters = when (entry.sourceType) {
                 BookSourceType.BUILTIN_ASSET -> {
                     val assetPath = entry.sourceUriOrUrl ?: "novels/yuan.zip"
@@ -626,6 +679,18 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
                         } catch (_: Exception) {
                             emptyList()
                         }
+                    } else emptyList()
+                }
+                BookSourceType.WEB_NOVEL -> {
+                    val localPath = entry.localPath
+                    if (!localPath.isNullOrBlank()) {
+                        val dir = File(localPath)
+                        val stored = repository.loadWebBookChapters(dir, entry.id)
+                        if (stored != null) {
+                            webBookDir = dir
+                            preferWebView = stored.preferWebView
+                            stored.chapters
+                        } else emptyList()
                     } else emptyList()
                 }
             }
@@ -660,7 +725,9 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
                 initialSegmentIndex = targetSegmentIndex,
                 startPlay = autoPlay,
                 novelId = updatedEntry.id,
-                novelTitle = resolvedTitle
+                novelTitle = resolvedTitle,
+                webBookDir = webBookDir,
+                preferWebView = preferWebView
             )
         }
     }
@@ -814,6 +881,22 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
     override fun onProgressActionNotification(message: String) {
         runOnUiThread {
             Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    override fun onWebChapterVerificationRequired(url: String, chapterIndex: Int, chapter: Chapter) {
+        runOnUiThread {
+            if (isFinishing || isDestroyed) return@runOnUiThread
+            if (supportFragmentManager.findFragmentByTag("WebChapterVerify") != null) return@runOnUiThread
+            Toast.makeText(this, "網站需要瀏覽器驗證，請於內建防廣告畫面確認後自動接續朗讀", Toast.LENGTH_SHORT).show()
+            val browser = WebNovelBrowserDialogFragment(
+                initialUrl = url,
+                mode = WebNovelBrowserDialogFragment.Mode.VERIFY_CHAPTER,
+                onChapterHtmlReady = { html, finalUrl ->
+                    ttsService?.onWebChapterHtmlVerified(chapterIndex, html, finalUrl, autoPlay = true)
+                }
+            )
+            browser.show(supportFragmentManager, "WebChapterVerify")
         }
     }
 

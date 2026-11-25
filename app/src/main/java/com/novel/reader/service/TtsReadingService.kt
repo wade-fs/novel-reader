@@ -37,9 +37,13 @@ import com.novel.reader.model.*
 import com.novel.reader.parser.NovelChapterParser
 import com.novel.reader.repository.NovelRepository
 import com.novel.reader.ui.MainActivity
+import com.novel.reader.util.ChapterFetchOutcome
 import com.novel.reader.util.FastVolumeController
 import com.novel.reader.util.ReadingProgressManager
+import com.novel.reader.util.WebBookStore
+import com.novel.reader.util.WebNovelParser
 import kotlinx.coroutines.*
+import java.io.File
 import java.util.*
 
 class TtsReadingService : Service(), TextToSpeech.OnInitListener {
@@ -418,6 +422,10 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
         private set
     var currentNovelTitle: String = ""
         private set
+    var currentWebBookDir: File? = null
+        private set
+    var currentPreferWebView: Boolean = false
+        private set
 
     var chapters: List<Chapter> = emptyList()
         private set
@@ -443,6 +451,7 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
         fun onSegmentChanged(segmentIndex: Int, segment: TtsSegment?)
         fun onTtsReady(availableVoices: List<Voice>)
         fun onProgressActionNotification(message: String) {}  // 段落/章節切換的 Toast 提示（有默認實作，不強制覆寫）
+        fun onWebChapterVerificationRequired(url: String, chapterIndex: Int, chapter: Chapter) {}
     }
 
     private val listeners = mutableListOf<PlaybackListener>()
@@ -895,10 +904,14 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
         initialSegmentIndex: Int = 0,
         startPlay: Boolean = false,
         novelId: String = currentNovelId,
-        novelTitle: String = currentNovelTitle
+        novelTitle: String = currentNovelTitle,
+        webBookDir: File? = null,
+        preferWebView: Boolean = false
     ) {
         currentNovelId = novelId
         currentNovelTitle = novelTitle
+        currentWebBookDir = webBookDir
+        currentPreferWebView = preferWebView
         chapters = list
         loadChapter(initialIndex, startPlay, initialSegmentIndex)
     }
@@ -910,6 +923,8 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
         stop()
         currentNovelId = ""
         currentNovelTitle = ""
+        currentWebBookDir = null
+        currentPreferWebView = false
         chapters = emptyList()
         currentChapterIndex = 0
         currentContent = null
@@ -919,7 +934,7 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
     }
 
     /**
-     * 載入特定章節
+     * 載入特定章節（支援本機與網路小說按需抓取＋預載下一章）
      */
     fun loadChapter(index: Int, autoPlay: Boolean = false, targetSegmentIndex: Int = 0) {
         if (index !in chapters.indices) return
@@ -927,21 +942,77 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
         val chapter = chapters[index]
 
         serviceScope.launch {
-            val content = repository.loadChapterContent(chapter)
-            currentContent = content
-            regenerateSegments()
-            currentSegmentIndex = targetSegmentIndex.coerceIn(0, maxOf(0, currentSegments.size - 1))
-
-            notifyChapterLoaded(chapter, content, currentSegments, currentSegmentIndex)
-            saveCurrentProgress()
-            updateMediaSessionPlaybackState()
-            updateNotification()
-
-            if (autoPlay) {
-                play()
-            } else if (playbackState == PlaybackState.PLAYING) {
-                speakCurrentSegment()
+            when (val outcome = repository.loadChapterContentOutcome(chapter, currentWebBookDir, currentPreferWebView)) {
+                is ChapterFetchOutcome.Success -> {
+                    applyLoadedChapter(index, chapter, outcome.content, autoPlay, targetSegmentIndex)
+                    // 靜態網路小說自動背景預載下一章，連播不斷線
+                    val nextChapter = chapters.getOrNull(index + 1)
+                    if (nextChapter != null && nextChapter.remoteUrl != null && !currentPreferWebView) {
+                        val bookDir = currentWebBookDir
+                        launch(Dispatchers.IO) {
+                            repository.prefetchWebChapterIfDirect(nextChapter, bookDir, preferWebView = false)
+                        }
+                    }
+                }
+                is ChapterFetchOutcome.NeedsInteractiveVerification -> {
+                    if (playbackState == PlaybackState.PLAYING) {
+                        pause()
+                    }
+                    listeners.forEach { it.onWebChapterVerificationRequired(outcome.url, index, chapter) }
+                }
+                is ChapterFetchOutcome.Error -> {
+                    notifyProgressAction("章節載入失敗：${outcome.message}")
+                }
             }
+        }
+    }
+
+    /**
+     * 當使用者於內建防廣告 WebView 完成驗證後，將取得的章節 HTML 寫入快取並接續朗讀
+     */
+    fun onWebChapterHtmlVerified(chapterIndex: Int, html: String, finalUrl: String, autoPlay: Boolean = true) {
+        val chapter = chapters.getOrNull(chapterIndex) ?: return
+        serviceScope.launch {
+            val content = withContext(Dispatchers.IO) {
+                val parsed = WebNovelParser.parseChapter(html, finalUrl, chapter.title)
+                if (parsed.bodyParagraphs.isNotEmpty()) {
+                    currentWebBookDir?.let { dir ->
+                        val cacheFile = WebBookStore.getCachedChapterFile(dir, chapter.chapterNumber)
+                        WebBookStore.saveCachedChapter(cacheFile, parsed)
+                    }
+                }
+                parsed
+            }
+            if (content.bodyParagraphs.isEmpty()) {
+                notifyProgressAction("未能從頁面抽取到正文內容")
+                return@launch
+            }
+            currentChapterIndex = chapterIndex
+            applyLoadedChapter(chapterIndex, chapter, content, autoPlay = autoPlay, targetSegmentIndex = 0)
+        }
+    }
+
+    private fun applyLoadedChapter(
+        index: Int,
+        chapter: Chapter,
+        content: ChapterContent,
+        autoPlay: Boolean,
+        targetSegmentIndex: Int
+    ) {
+        if (index != currentChapterIndex) return
+        currentContent = content
+        regenerateSegments()
+        currentSegmentIndex = targetSegmentIndex.coerceIn(0, maxOf(0, currentSegments.size - 1))
+
+        notifyChapterLoaded(chapter, content, currentSegments, currentSegmentIndex)
+        saveCurrentProgress()
+        updateMediaSessionPlaybackState()
+        updateNotification()
+
+        if (autoPlay) {
+            play()
+        } else if (playbackState == PlaybackState.PLAYING) {
+            speakCurrentSegment()
         }
     }
 

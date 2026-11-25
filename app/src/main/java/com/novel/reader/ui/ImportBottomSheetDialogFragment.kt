@@ -10,13 +10,17 @@ import android.widget.Toast
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import com.novel.reader.databinding.DialogImportGithubBinding
-import com.novel.reader.model.Chapter
 import com.novel.reader.util.GitHubHelper
 import com.novel.reader.util.GitHubLoadResult
+import com.novel.reader.util.WebBookImportResult
+import com.novel.reader.util.WebNovelFetcher
+import com.novel.reader.util.WebNovelParser
 import kotlinx.coroutines.launch
 
 class ImportBottomSheetDialogFragment(
     private val onImportSuccess: (result: GitHubLoadResult.Success) -> Unit,
+    private val onWebBookImported: (result: WebBookImportResult.Success) -> Unit,
+    private val onOpenWebBrowser: (url: String) -> Unit,
     private val onPickArchive: () -> Unit,
     private val onPickDirectory: () -> Unit
 ) : BottomSheetDialogFragment() {
@@ -47,12 +51,18 @@ class ImportBottomSheetDialogFragment(
             }
         }
 
-        // 範例捷徑
+        // 範例捷徑（網路小說 + GitHub）
+        binding.chipExamplePiaotia.setOnClickListener {
+            binding.etGithubUrl.setText("https://www.piaotia.com/html/3/3759/")
+        }
+        binding.chipExampleCzbooks.setOnClickListener {
+            binding.etGithubUrl.setText("https://czbooks.net/n/ucpije")
+        }
+        binding.chipExampleUukanshu.setOnClickListener {
+            binding.etGithubUrl.setText("https://uukanshu.cc/book/27525/")
+        }
         binding.chipExampleYuanTree.setOnClickListener {
             binding.etGithubUrl.setText("https://github.com/wade-fs/novel/tree/main/yuan")
-        }
-        binding.chipExampleYuanChap1.setOnClickListener {
-            binding.etGithubUrl.setText("https://github.com/wade-fs/novel/blob/main/yuan/chapters/volume1/chap001.md")
         }
         binding.chipExampleGuixu.setOnClickListener {
             binding.etGithubUrl.setText("https://github.com/wade-fs/novel/tree/main/song")
@@ -61,21 +71,37 @@ class ImportBottomSheetDialogFragment(
             binding.etGithubUrl.setText("https://github.com/wade-fs/novel/tree/main/sex")
         }
 
-        // 下載並閱讀
+        // 抓取並開始朗讀（自動分辨 GitHub 或一般小說網站）
         binding.btnDownloadAndRead.setOnClickListener {
             val url = binding.etGithubUrl.text?.toString()?.trim() ?: ""
             if (url.isEmpty()) {
-                Toast.makeText(requireContext(), "請輸入或貼上 GitHub 網址", Toast.LENGTH_SHORT).show()
+                Toast.makeText(requireContext(), "請輸入或貼上小說網址", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
 
-            val info = GitHubHelper.parseUrl(url)
-            if (info == null) {
-                Toast.makeText(requireContext(), "無法識別的 GitHub 網址格式，請確認是否包含 github.com", Toast.LENGTH_LONG).show()
+            val ghInfo = GitHubHelper.parseUrl(url)
+            if (ghInfo != null) {
+                startGitHubDownload(ghInfo)
                 return@setOnClickListener
             }
 
-            startDownload(info)
+            if (WebNovelParser.isWebNovelUrl(url)) {
+                startWebNovelImport(url)
+                return@setOnClickListener
+            }
+
+            Toast.makeText(requireContext(), "請輸入有效的 http:// 或 https:// 網址", Toast.LENGTH_LONG).show()
+        }
+
+        // 直接使用內建防廣告瀏覽器開啟
+        binding.btnOpenWebBrowser.setOnClickListener {
+            val url = binding.etGithubUrl.text?.toString()?.trim() ?: ""
+            if (!url.startsWith("http://", true) && !url.startsWith("https://", true)) {
+                Toast.makeText(requireContext(), "請先輸入或貼上小說網站網址", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            dismiss()
+            onOpenWebBrowser(url)
         }
 
         // 本機上傳 ZIP / TAR
@@ -91,9 +117,48 @@ class ImportBottomSheetDialogFragment(
         }
     }
 
-    private fun startDownload(info: com.novel.reader.util.GitHubUrlInfo) {
+    private fun startWebNovelImport(url: String) {
         binding.layoutProgress.visibility = View.VISIBLE
         binding.btnDownloadAndRead.isEnabled = false
+        binding.btnOpenWebBrowser.isEnabled = false
+        isCancelable = false
+        binding.tvProgressMessage.text = "正在連線解析小說網頁與章節目錄..."
+
+        lifecycleScope.launch {
+            val result = WebNovelFetcher.importFromUrlDirect(requireContext(), url)
+
+            val b = _binding ?: return@launch
+            b.layoutProgress.visibility = View.GONE
+            b.btnDownloadAndRead.isEnabled = true
+            b.btnOpenWebBrowser.isEnabled = true
+            isCancelable = true
+
+            when (result) {
+                is WebBookImportResult.Success -> {
+                    Toast.makeText(
+                        requireContext(),
+                        "已加入書單「${result.title}」（共 ${result.chapters.size} 章）",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                    dismiss()
+                    onWebBookImported(result)
+                }
+                is WebBookImportResult.NeedsInteractiveWebView -> {
+                    Toast.makeText(requireContext(), result.reason, Toast.LENGTH_SHORT).show()
+                    dismiss()
+                    onOpenWebBrowser(result.url)
+                }
+                is WebBookImportResult.Error -> {
+                    Toast.makeText(requireContext(), "${result.message}，您也可以嘗試用內建防廣告瀏覽器開啟", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    private fun startGitHubDownload(info: com.novel.reader.util.GitHubUrlInfo) {
+        binding.layoutProgress.visibility = View.VISIBLE
+        binding.btnDownloadAndRead.isEnabled = false
+        binding.btnOpenWebBrowser.isEnabled = false
         isCancelable = false
 
         lifecycleScope.launch {
@@ -104,13 +169,15 @@ class ImportBottomSheetDialogFragment(
                 binding.tvProgressMessage.text = "正在從 GitHub 取得專案並解壓小說..."
                 GitHubHelper.downloadTreeFolder(requireContext(), info) { msg ->
                     lifecycleScope.launch {
-                        binding.tvProgressMessage.text = msg
+                        _binding?.tvProgressMessage?.text = msg
                     }
                 }
             }
 
-            binding.layoutProgress.visibility = View.GONE
-            binding.btnDownloadAndRead.isEnabled = true
+            val b = _binding ?: return@launch
+            b.layoutProgress.visibility = View.GONE
+            b.btnDownloadAndRead.isEnabled = true
+            b.btnOpenWebBrowser.isEnabled = true
             isCancelable = true
 
             when (result) {

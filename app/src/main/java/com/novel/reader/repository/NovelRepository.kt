@@ -8,6 +8,10 @@ import com.novel.reader.model.ChapterContent
 import com.novel.reader.parser.NovelChapterParser
 import com.novel.reader.util.ArchiveHelper
 import com.novel.reader.util.BookMetadataParser
+import com.novel.reader.util.ChapterFetchOutcome
+import com.novel.reader.util.StoredWebBook
+import com.novel.reader.util.WebBookStore
+import com.novel.reader.util.WebNovelFetcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
@@ -231,6 +235,63 @@ class NovelRepository(private val context: Context) {
         scan(searchDir, 1, "第一卷")
         chapters.sortBy { it.chapterNumber }
         return chapters
+    }
+
+    /**
+     * 從本機已儲存的網路小說目錄載入書目與章節清單（秒開，實際章節正文於閱讀時按需抓取並快取）
+     */
+    suspend fun loadWebBookChapters(bookDir: File, bookId: String): StoredWebBook? = withContext(Dispatchers.IO) {
+        val stored = WebBookStore.loadBook(bookDir) ?: return@withContext null
+        cachedChapters.clear()
+        cachedChapters.addAll(stored.chapters)
+        currentNovelId = bookId
+        currentNovelTitle = stored.title
+        currentNovelLocalPath = bookDir.absolutePath
+        stored
+    }
+
+    /**
+     * 載入特定章節的完整內容（支援本機檔案、assets 與網路小說按需抓取+快取）
+     */
+    suspend fun loadChapterContentOutcome(
+        chapter: Chapter,
+        webBookDir: File? = null,
+        preferWebView: Boolean = false
+    ): ChapterFetchOutcome {
+        // 若為網路小說章節，走快取優先 -> 直連 / WebView Session 抓取
+        if (chapter.remoteUrl != null) {
+            return WebNovelFetcher.fetchChapterWithCache(
+                context = context,
+                chapter = chapter,
+                bookDir = webBookDir,
+                preferWebView = preferWebView
+            )
+        }
+
+        val content = loadChapterContent(chapter)
+        return ChapterFetchOutcome.Success(content, null)
+    }
+
+    /**
+     * 背景預載下一章（僅針對可直連的靜態網路小說，讓自動連播零延遲）
+     */
+    suspend fun prefetchWebChapterIfDirect(
+        chapter: Chapter,
+        webBookDir: File?,
+        preferWebView: Boolean
+    ) {
+        if (chapter.remoteUrl == null || preferWebView || webBookDir == null) return
+        val cacheFile = WebBookStore.getCachedChapterFile(webBookDir, chapter.chapterNumber)
+        if (cacheFile.exists() && cacheFile.length() > 0L) return
+        try {
+            WebNovelFetcher.fetchChapterWithCache(
+                context = context,
+                chapter = chapter,
+                bookDir = webBookDir,
+                preferWebView = false
+            )
+        } catch (_: Exception) {
+        }
     }
 
     /**
