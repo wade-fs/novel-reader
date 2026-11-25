@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.media.AudioManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
@@ -31,9 +32,12 @@ import com.novel.reader.databinding.ActivityMainBinding
 import com.novel.reader.model.*
 import com.novel.reader.repository.NovelRepository
 import com.novel.reader.service.TtsReadingService
+import com.novel.reader.util.BookLibraryManager
+import com.novel.reader.util.GitHubLoadResult
 import com.novel.reader.util.ReadingProgressManager
 import com.novel.reader.util.SavedReadingProgress
 import kotlinx.coroutines.launch
+import java.io.File
 
 class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
 
@@ -41,6 +45,7 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
     private lateinit var contentAdapter: NovelContentAdapter
     private lateinit var repository: NovelRepository
     private lateinit var progressManager: ReadingProgressManager
+    private lateinit var bookLibraryManager: BookLibraryManager
 
     private var ttsService: TtsReadingService? = null
     private var isBound = false
@@ -59,8 +64,12 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
             ttsService?.addListener(this@MainActivity)
 
             if (ttsService?.chapters.isNullOrEmpty()) {
-                loadBuiltinNovels()
+                loadInitialBookFromLibrary()
             } else {
+                val activeTitle = ttsService?.currentNovelTitle
+                if (!activeTitle.isNullOrBlank()) {
+                    binding.toolbar.title = activeTitle
+                }
                 updatePlaybackControls(ttsService?.playbackState ?: TtsReadingService.PlaybackState.IDLE)
                 updateSettingsBadges()
             }
@@ -82,16 +91,48 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
         ActivityResultContracts.OpenDocumentTree()
     ) { treeUri ->
         if (treeUri != null) {
-            contentResolver.takePersistableUriPermission(
-                treeUri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION
-            )
+            try {
+                contentResolver.takePersistableUriPermission(
+                    treeUri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (_: Exception) {
+            }
             lifecycleScope.launch {
                 val externalChapters = repository.loadCustomDirectoryChapters(treeUri)
                 if (externalChapters.isNotEmpty()) {
-                    ttsService?.setChapterList(externalChapters, 0, startPlay = true)
-                    binding.toolbar.title = repository.currentNovelTitle
-                    Toast.makeText(this@MainActivity, "成功載入外部目錄：共 ${externalChapters.size} 章", Toast.LENGTH_SHORT).show()
+                    val now = System.currentTimeMillis()
+                    val entry = BookEntry(
+                        id = repository.currentNovelId,
+                        title = repository.currentNovelTitle,
+                        sourceType = BookSourceType.LOCAL_DIRECTORY,
+                        localPath = null,
+                        sourceUriOrUrl = treeUri.toString(),
+                        chapterCount = externalChapters.size,
+                        addedAt = now,
+                        lastOpenedAt = now
+                    )
+                    bookLibraryManager.addOrUpdateBook(entry)
+                    bookLibraryManager.markOpened(entry.id)
+
+                    val saved = progressManager.getSavedProgressForBook(entry.id)
+                    val targetIdx = saved?.chapterIndex?.coerceIn(externalChapters.indices) ?: 0
+                    val targetSeg = saved?.segmentIndex ?: 0
+
+                    binding.toolbar.title = entry.title
+                    ttsService?.setChapterList(
+                        list = externalChapters,
+                        initialIndex = targetIdx,
+                        initialSegmentIndex = targetSeg,
+                        startPlay = true,
+                        novelId = entry.id,
+                        novelTitle = entry.title
+                    )
+                    Toast.makeText(
+                        this@MainActivity,
+                        "已加入書單「${entry.title}」（共 ${externalChapters.size} 章）",
+                        Toast.LENGTH_SHORT
+                    ).show()
                 } else {
                     Toast.makeText(this@MainActivity, "所選目錄中未找到小說章節檔案 (.md / .txt)", Toast.LENGTH_LONG).show()
                 }
@@ -109,9 +150,38 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
                 Toast.makeText(this@MainActivity, "正在讀取壓縮檔：$fileName...", Toast.LENGTH_SHORT).show()
                 val chapters = repository.loadArchiveChapters(archiveUri, fileName)
                 if (chapters.isNotEmpty()) {
-                    ttsService?.setChapterList(chapters, 0, startPlay = true)
-                    binding.toolbar.title = repository.currentNovelTitle
-                    Toast.makeText(this@MainActivity, "成功解開壓縮檔：共 ${chapters.size} 章", Toast.LENGTH_SHORT).show()
+                    val now = System.currentTimeMillis()
+                    val entry = BookEntry(
+                        id = repository.currentNovelId,
+                        title = repository.currentNovelTitle,
+                        sourceType = BookSourceType.LOCAL_ARCHIVE,
+                        localPath = repository.currentNovelLocalPath,
+                        sourceUriOrUrl = fileName,
+                        chapterCount = chapters.size,
+                        addedAt = now,
+                        lastOpenedAt = now
+                    )
+                    bookLibraryManager.addOrUpdateBook(entry)
+                    bookLibraryManager.markOpened(entry.id)
+
+                    val saved = progressManager.getSavedProgressForBook(entry.id)
+                    val targetIdx = saved?.chapterIndex?.coerceIn(chapters.indices) ?: 0
+                    val targetSeg = saved?.segmentIndex ?: 0
+
+                    binding.toolbar.title = entry.title
+                    ttsService?.setChapterList(
+                        list = chapters,
+                        initialIndex = targetIdx,
+                        initialSegmentIndex = targetSeg,
+                        startPlay = true,
+                        novelId = entry.id,
+                        novelTitle = entry.title
+                    )
+                    Toast.makeText(
+                        this@MainActivity,
+                        "已加入書單「${entry.title}」（共 ${chapters.size} 章）",
+                        Toast.LENGTH_SHORT
+                    ).show()
                 } else {
                     Toast.makeText(this@MainActivity, "無法從壓縮檔中讀取到章節檔案", Toast.LENGTH_LONG).show()
                 }
@@ -134,6 +204,7 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
 
         repository = NovelRepository(this)
         progressManager = ReadingProgressManager(this)
+        bookLibraryManager = BookLibraryManager(this)
 
         checkNotificationPermission()
         setupRecyclerView()
@@ -159,10 +230,8 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
         val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
         val isInteractive = powerManager?.isInteractive ?: true
         if (isInteractive) {
-            // 螢幕仍亮著：代表使用者切換到其他 App 或回到桌面
             ttsService?.setAppInForeground(false)
         } else {
-            // 螢幕已暗下 / 進入休眠 / 螢幕保護：記錄是從前景進入息屏模式
             ttsService?.onScreenOffFromForeground()
         }
     }
@@ -177,7 +246,6 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
     }
 
     private fun setupWindowInsets() {
-        // 處理頂部 AppBarLayout 內邊距，避免與暫時呼出的狀態列或螢幕挖孔/瀏海重疊
         ViewCompat.setOnApplyWindowInsetsListener(binding.appBarLayout) { v, insets ->
             val statusBar = insets.getInsets(WindowInsetsCompat.Type.statusBars()).top
             val cutout = insets.getInsets(WindowInsetsCompat.Type.displayCutout()).top
@@ -186,7 +254,6 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
             insets
         }
 
-        // 處理底部播放卡片外邊距，當暫時呼出導航列時自動浮起避免遮蔽
         ViewCompat.setOnApplyWindowInsetsListener(binding.bottomPlayerCard) { v, insets ->
             val navBar = insets.getInsets(WindowInsetsCompat.Type.navigationBars()).bottom
             val baseMargin = (12 * resources.displayMetrics.density).toInt()
@@ -254,28 +321,17 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
             showJumpChapterDialog()
         }
 
+        // 點擊工具列標題區域或書單按鈕皆可開啟我的書單
+        binding.toolbar.setOnClickListener {
+            showBookListSheet()
+        }
+        binding.btnBookList.setOnClickListener {
+            showBookListSheet()
+        }
+
         // 匯入小說 (GitHub 網址 / 本機 ZIP / 本機目錄)
         binding.btnImportNovel.setOnClickListener {
-            val sheet = ImportBottomSheetDialogFragment(
-                onImportSuccess = { chapters, novelTitle, _ ->
-                    ttsService?.setChapterList(chapters, 0, startPlay = true)
-                    binding.toolbar.title = novelTitle
-                },
-                onPickArchive = {
-                    openArchiveLauncher.launch(arrayOf(
-                        "application/zip",
-                        "application/x-zip-compressed",
-                        "application/x-tar",
-                        "application/gzip",
-                        "application/x-gzip",
-                        "*/*"
-                    ))
-                },
-                onPickDirectory = {
-                    openDocumentTreeLauncher.launch(null)
-                }
-            )
-            sheet.show(supportFragmentManager, "ImportSheet")
+            showImportSheet()
         }
 
         // 播放 / 暫停 大按鈕
@@ -311,6 +367,10 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
         // 章節目錄 BottomSheet
         binding.btnChapterList.setOnClickListener {
             val service = ttsService ?: return@setOnClickListener
+            if (service.chapters.isEmpty()) {
+                Toast.makeText(this, "目前尚無章節，請先匯入小說", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
             val sheet = ChapterListBottomSheetDialogFragment(
                 chapters = service.chapters,
                 currentIndex = service.currentChapterIndex
@@ -342,17 +402,128 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
         binding.btnResumePlay.setOnClickListener {
             val progress = pendingSavedProgress ?: return@setOnClickListener
             val service = ttsService ?: return@setOnClickListener
-            service.loadChapter(
-                index = progress.chapterIndex,
-                autoPlay = true,
-                targetSegmentIndex = progress.segmentIndex
-            )
-            binding.cardResumeBanner.visibility = View.GONE
+            if (service.currentNovelId == progress.novelId && service.chapters.isNotEmpty()) {
+                service.loadChapter(
+                    index = progress.chapterIndex.coerceIn(service.chapters.indices),
+                    autoPlay = true,
+                    targetSegmentIndex = progress.segmentIndex
+                )
+                binding.cardResumeBanner.visibility = View.GONE
+            } else {
+                val targetBook = bookLibraryManager.getBookById(progress.novelId)
+                if (targetBook != null) {
+                    binding.cardResumeBanner.visibility = View.GONE
+                    openBookEntry(targetBook, autoPlay = true)
+                } else {
+                    binding.cardResumeBanner.visibility = View.GONE
+                }
+            }
         }
 
         binding.btnCloseResumeBanner.setOnClickListener {
             binding.cardResumeBanner.visibility = View.GONE
         }
+    }
+
+    private fun showBookListSheet() {
+        val sheet = BookListBottomSheetDialogFragment(
+            getBooks = { bookLibraryManager.getBooks() },
+            getCurrentBookId = { ttsService?.currentNovelId?.ifBlank { bookLibraryManager.getLastActiveBookId() } },
+            onSelectBook = { entry ->
+                openBookEntry(entry, autoPlay = false)
+            },
+            onDeleteBook = { entry ->
+                handleDeleteBook(entry)
+            },
+            onAddBook = {
+                showImportSheet()
+            }
+        )
+        sheet.show(supportFragmentManager, "BookListSheet")
+    }
+
+    private fun showImportSheet() {
+        val sheet = ImportBottomSheetDialogFragment(
+            onImportSuccess = { result ->
+                handleGitHubImportSuccess(result)
+            },
+            onPickArchive = {
+                openArchiveLauncher.launch(arrayOf(
+                    "application/zip",
+                    "application/x-zip-compressed",
+                    "application/x-tar",
+                    "application/gzip",
+                    "application/x-gzip",
+                    "*/*"
+                ))
+            },
+            onPickDirectory = {
+                openDocumentTreeLauncher.launch(null)
+            }
+        )
+        sheet.show(supportFragmentManager, "ImportSheet")
+    }
+
+    private fun handleGitHubImportSuccess(result: GitHubLoadResult.Success) {
+        val now = System.currentTimeMillis()
+        val entry = BookEntry(
+            id = result.bookId,
+            title = result.title,
+            sourceType = if (result.isSingleChapter) BookSourceType.GITHUB_SINGLE else BookSourceType.GITHUB_TREE,
+            localPath = result.localDirPath,
+            sourceUriOrUrl = result.sourceUrl,
+            chapterCount = result.chapters.size,
+            addedAt = now,
+            lastOpenedAt = now
+        )
+        bookLibraryManager.addOrUpdateBook(entry)
+        bookLibraryManager.markOpened(entry.id)
+
+        val saved = progressManager.getSavedProgressForBook(entry.id)
+        val targetIdx = saved?.chapterIndex?.coerceIn(result.chapters.indices) ?: 0
+        val targetSeg = saved?.segmentIndex ?: 0
+
+        binding.toolbar.title = entry.title
+        ttsService?.setChapterList(
+            list = result.chapters,
+            initialIndex = targetIdx,
+            initialSegmentIndex = targetSeg,
+            startPlay = true,
+            novelId = entry.id,
+            novelTitle = entry.title
+        )
+    }
+
+    private fun handleDeleteBook(entry: BookEntry) {
+        val wasCurrent = (ttsService?.currentNovelId == entry.id)
+        bookLibraryManager.deleteBook(entry.id)
+        progressManager.clearProgressForBook(entry.id)
+
+        if (pendingSavedProgress?.novelId == entry.id) {
+            pendingSavedProgress = null
+            binding.cardResumeBanner.visibility = View.GONE
+        }
+
+        Toast.makeText(this, "已從書單刪除「${entry.title}」", Toast.LENGTH_SHORT).show()
+
+        if (wasCurrent) {
+            val remaining = bookLibraryManager.getBooks()
+            if (remaining.isNotEmpty()) {
+                openBookEntry(remaining.first(), autoPlay = false)
+            } else {
+                ttsService?.clearChapters()
+                showEmptyLibraryState()
+            }
+        }
+    }
+
+    private fun showEmptyLibraryState() {
+        contentAdapter.clearContent()
+        binding.toolbar.title = getString(R.string.app_name)
+        binding.toolbar.subtitle = "書單為空"
+        binding.tvCurrentChapterInfo.text = "書單目前為空，請點擊右上角匯入小說"
+        binding.tvSpeakingStatus.text = "點擊右上角書單或匯入按鈕新增小說"
+        updatePlaybackControls(TtsReadingService.PlaybackState.IDLE)
     }
 
     private fun showJumpChapterDialog() {
@@ -368,38 +539,133 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
     }
 
     private fun checkResumeProgress() {
-        val saved = progressManager.getSavedProgress()
-        if (saved != null) {
+        val saved = progressManager.getSavedProgress() ?: return
+        val hasBookInLibrary = !bookLibraryManager.hasInitializedBuiltins() ||
+            bookLibraryManager.getBookById(saved.novelId) != null
+        if (hasBookInLibrary) {
             pendingSavedProgress = saved
             binding.cardResumeBanner.visibility = View.VISIBLE
-            binding.tvResumeProgressText.text = "上次朗讀至：第 ${saved.chapterNumber} 章 ${saved.chapterTitle} · 段落 ${saved.uiPosition + 1}"
+            val bookPrefix = if (saved.novelTitle.isNotBlank()) "《${saved.novelTitle}》" else ""
+            binding.tvResumeProgressText.text =
+                "上次朗讀至：$bookPrefix 第 ${saved.chapterNumber} 章 ${saved.chapterTitle} · 段落 ${saved.uiPosition + 1}"
         }
     }
 
-    private fun loadBuiltinNovels() {
+    private fun loadInitialBookFromLibrary() {
         lifecycleScope.launch {
-            val chapters = repository.loadBuiltinNovelChapters()
-            if (chapters.isNotEmpty()) {
-                val saved = progressManager.getSavedProgress()
-                val targetChapterIndex = if (saved != null && saved.novelId == repository.currentNovelId) {
-                    saved.chapterIndex.coerceIn(chapters.indices)
-                } else 0
+            // 首次啟動：將預設內建小說加入書單（書名動態取自 book.yaml 或檔名）
+            if (!bookLibraryManager.hasInitializedBuiltins() && bookLibraryManager.getBooks().isEmpty()) {
+                val assetPath = "novels/yuan.zip"
+                val chapters = repository.loadBuiltinNovelChapters(assetPath)
+                bookLibraryManager.setInitializedBuiltins(true)
+                if (chapters.isNotEmpty()) {
+                    val now = System.currentTimeMillis()
+                    val entry = BookEntry(
+                        id = repository.currentNovelId,
+                        title = repository.currentNovelTitle,
+                        sourceType = BookSourceType.BUILTIN_ASSET,
+                        localPath = repository.currentNovelLocalPath,
+                        sourceUriOrUrl = assetPath,
+                        chapterCount = chapters.size,
+                        addedAt = now,
+                        lastOpenedAt = now
+                    )
+                    bookLibraryManager.addOrUpdateBook(entry)
+                    bookLibraryManager.markOpened(entry.id)
 
-                val targetSegmentIndex = if (saved != null && saved.novelId == repository.currentNovelId) {
-                    saved.segmentIndex
-                } else 0
+                    val saved = progressManager.getSavedProgressForBook(entry.id)
+                    val targetChapterIndex = saved?.chapterIndex?.coerceIn(chapters.indices) ?: 0
+                    val targetSegmentIndex = saved?.segmentIndex ?: 0
 
-                ttsService?.setChapterList(
-                    list = chapters,
-                    initialIndex = targetChapterIndex,
-                    initialSegmentIndex = targetSegmentIndex,
-                    startPlay = false
-                )
+                    binding.toolbar.title = entry.title
+                    ttsService?.setChapterList(
+                        list = chapters,
+                        initialIndex = targetChapterIndex,
+                        initialSegmentIndex = targetSegmentIndex,
+                        startPlay = false,
+                        novelId = entry.id,
+                        novelTitle = entry.title
+                    )
+                    return@launch
+                }
+            }
+
+            // 載入書單中最後閱讀的書籍
+            val lastId = bookLibraryManager.getLastActiveBookId()
+            val targetBook = lastId?.let { bookLibraryManager.getBookById(it) }
+                ?: bookLibraryManager.getBooks().firstOrNull()
+
+            if (targetBook != null) {
+                openBookEntry(targetBook, autoPlay = false)
+            } else {
+                showEmptyLibraryState()
             }
         }
     }
 
-    private fun queryDisplayName(uri: android.net.Uri): String? {
+    private fun openBookEntry(entry: BookEntry, autoPlay: Boolean) {
+        lifecycleScope.launch {
+            val chapters = when (entry.sourceType) {
+                BookSourceType.BUILTIN_ASSET -> {
+                    val assetPath = entry.sourceUriOrUrl ?: "novels/yuan.zip"
+                    repository.loadBuiltinNovelChapters(assetPath, entry.id)
+                }
+                BookSourceType.GITHUB_TREE,
+                BookSourceType.GITHUB_SINGLE,
+                BookSourceType.LOCAL_ARCHIVE -> {
+                    val localPath = entry.localPath
+                    if (!localPath.isNullOrBlank()) {
+                        repository.loadLocalDirectoryChapters(File(localPath), entry.id, entry.title)
+                    } else emptyList()
+                }
+                BookSourceType.LOCAL_DIRECTORY -> {
+                    val uriStr = entry.sourceUriOrUrl
+                    if (!uriStr.isNullOrBlank()) {
+                        try {
+                            repository.loadCustomDirectoryChapters(Uri.parse(uriStr))
+                        } catch (_: Exception) {
+                            emptyList()
+                        }
+                    } else emptyList()
+                }
+            }
+
+            if (chapters.isEmpty()) {
+                Toast.makeText(
+                    this@MainActivity,
+                    "無法開啟「${entry.title}」，檔案可能已遺失或權限過期",
+                    Toast.LENGTH_LONG
+                ).show()
+                return@launch
+            }
+
+            val resolvedTitle = repository.currentNovelTitle.ifBlank { entry.title }
+            val updatedEntry = entry.copy(
+                title = resolvedTitle,
+                chapterCount = chapters.size,
+                localPath = repository.currentNovelLocalPath ?: entry.localPath,
+                lastOpenedAt = System.currentTimeMillis()
+            )
+            bookLibraryManager.addOrUpdateBook(updatedEntry)
+            bookLibraryManager.markOpened(updatedEntry.id)
+
+            val saved = progressManager.getSavedProgressForBook(updatedEntry.id)
+            val targetChapterIndex = saved?.chapterIndex?.coerceIn(chapters.indices) ?: 0
+            val targetSegmentIndex = saved?.segmentIndex ?: 0
+
+            binding.toolbar.title = resolvedTitle
+            ttsService?.setChapterList(
+                list = chapters,
+                initialIndex = targetChapterIndex,
+                initialSegmentIndex = targetSegmentIndex,
+                startPlay = autoPlay,
+                novelId = updatedEntry.id,
+                novelTitle = resolvedTitle
+            )
+        }
+    }
+
+    private fun queryDisplayName(uri: Uri): String? {
         return contentResolver.query(uri, null, null, null, null)?.use { cursor ->
             val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
             if (cursor.moveToFirst() && nameIndex != -1) {
@@ -412,11 +678,10 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
         val service = ttsService ?: return
         val settings = service.settings
 
-        val modeText = when {
-            settings.filterConfig.isBodyOnly -> getString(R.string.mode_body_only)
-            settings.filterConfig.isFull -> getString(R.string.mode_full)
-            settings.filterConfig.readChapterTitle && !settings.filterConfig.readWorkRecords -> getString(R.string.mode_title_and_body)
-            else -> getString(R.string.mode_custom)
+        val modeText = if (settings.filterConfig.readChapterTitle) {
+            getString(R.string.mode_title_and_body)
+        } else {
+            getString(R.string.mode_body_only)
         }
         binding.chipFilterBadge.text = modeText
 
@@ -441,6 +706,9 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
         if (service != null) {
             binding.btnPrevChapter.isEnabled = service.currentChapterIndex > 0
             binding.btnNextChapter.isEnabled = service.currentChapterIndex < service.chapters.size - 1
+        } else {
+            binding.btnPrevChapter.isEnabled = false
+            binding.btnNextChapter.isEnabled = false
         }
     }
 
@@ -457,7 +725,11 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
                     binding.tvSpeakingStatus.text = "朗讀已暫停，點擊播放繼續"
                 }
                 TtsReadingService.PlaybackState.IDLE -> {
-                    binding.tvSpeakingStatus.text = "準備就緒，點擊播放開始朗讀"
+                    if (ttsService?.chapters.isNullOrEmpty()) {
+                        binding.tvSpeakingStatus.text = "點擊右上角書單或匯入按鈕新增小說"
+                    } else {
+                        binding.tvSpeakingStatus.text = "準備就緒，點擊播放開始朗讀"
+                    }
                     contentAdapter.setActiveUiPosition(-1)
                 }
             }
@@ -469,6 +741,11 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
             val service = ttsService
             val hasPrev = (service?.currentChapterIndex ?: 0) > 0
             val hasNext = (service?.currentChapterIndex ?: 0) < (service?.chapters?.size ?: 0) - 1
+
+            val activeTitle = service?.currentNovelTitle
+            if (!activeTitle.isNullOrBlank()) {
+                binding.toolbar.title = activeTitle
+            }
 
             binding.tvCurrentChapterInfo.text = "${chapter.volumeName} · 第 ${chapter.chapterNumber} 章 ${content.title}  (點擊直達)"
             binding.toolbar.subtitle = "${chapter.volumeName} (第 ${chapter.chapterNumber}/${service?.chapters?.size ?: 0} 章)"
@@ -524,13 +801,11 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
             val direction = if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) 1 else -1
 
             if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-                // 只在前景（Activity 可見）時交由 FastVolumeController 處理
                 if (service != null) {
                     service.handleVolumeAction(direction, fromHardwareKey = true)
                     return true
                 }
             }
-            // ACTION_UP 和 repeatCount > 0 的長按重複事件：交給系統正常處理（已由 ACTION_DOWN 觸發 handleVolumeAction）
         }
 
         return super.dispatchKeyEvent(event)

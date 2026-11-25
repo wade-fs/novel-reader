@@ -16,7 +16,7 @@ import com.novel.reader.util.GitHubLoadResult
 import kotlinx.coroutines.launch
 
 class ImportBottomSheetDialogFragment(
-    private val onImportSuccess: (chapters: List<Chapter>, novelTitle: String, isSingleChapter: Boolean) -> Unit,
+    private val onImportSuccess: (result: GitHubLoadResult.Success) -> Unit,
     private val onPickArchive: () -> Unit,
     private val onPickDirectory: () -> Unit
 ) : BottomSheetDialogFragment() {
@@ -121,7 +121,7 @@ class ImportBottomSheetDialogFragment(
                         Toast.LENGTH_SHORT
                     ).show()
                     dismiss()
-                    onImportSuccess(result.chapters, result.title, result.isSingleChapter)
+                    onImportSuccess(result)
                 }
                 is GitHubLoadResult.Error -> {
                     Toast.makeText(requireContext(), result.message, Toast.LENGTH_LONG).show()

@@ -6,6 +6,24 @@ import java.util.zip.ZipInputStream
 
 object ArchiveHelper {
 
+    private fun shouldExtractEntry(entryName: String): Boolean {
+        val lower = entryName.lowercase()
+        return lower.endsWith(".md") ||
+                lower.endsWith(".txt") ||
+                BookMetadataParser.isBookYamlFileName(entryName)
+    }
+
+    private fun resolveSafeOutputFile(destDir: File, entryName: String): File? {
+        val destCanonical = destDir.canonicalPath
+        val outFile = File(destDir, entryName)
+        val outCanonical = outFile.canonicalPath
+        return if (outCanonical.startsWith(destCanonical + File.separator) || outCanonical == destCanonical) {
+            outFile
+        } else {
+            null
+        }
+    }
+
     /**
      * 自動偵測副檔名與魔術字元解壓縮 ZIP、TAR、TAR.GZ (.tgz)
      */
@@ -42,22 +60,25 @@ object ArchiveHelper {
     }
 
     /**
-     * 解壓 ZIP 串流
+     * 解壓 ZIP 串流（同時保留 book.yaml / book.yml 與 .md / .txt）
      */
     fun extractZip(inputStream: InputStream, destDir: File): Boolean {
         return try {
+            destDir.mkdirs()
             ZipInputStream(BufferedInputStream(inputStream)).use { zis ->
                 var entry = zis.nextEntry
                 val buffer = ByteArray(8192)
                 while (entry != null) {
                     val entryName = entry.name
-                    if (!entry.isDirectory && (entryName.endsWith(".md") || entryName.endsWith(".txt"))) {
-                        val outFile = File(destDir, entryName)
-                        outFile.parentFile?.mkdirs()
-                        FileOutputStream(outFile).use { fos ->
-                            var len: Int
-                            while (zis.read(buffer).also { len = it } > 0) {
-                                fos.write(buffer, 0, len)
+                    if (!entry.isDirectory && shouldExtractEntry(entryName)) {
+                        val outFile = resolveSafeOutputFile(destDir, entryName)
+                        if (outFile != null) {
+                            outFile.parentFile?.mkdirs()
+                            FileOutputStream(outFile).use { fos ->
+                                var len: Int
+                                while (zis.read(buffer).also { len = it } > 0) {
+                                    fos.write(buffer, 0, len)
+                                }
                             }
                         }
                     }
@@ -73,14 +94,14 @@ object ArchiveHelper {
     }
 
     /**
-     * 解壓 TAR 串流 (支援標準 UStar/POSIX Tar 格式)
+     * 解壓 TAR 串流 (支援標準 UStar/POSIX Tar 格式，同時保留 book.yaml / book.yml 與 .md / .txt)
      */
     fun extractTar(inputStream: InputStream, destDir: File): Boolean {
         return try {
+            destDir.mkdirs()
             val buffer = ByteArray(512)
             var bytesRead: Int
             while (true) {
-                // 讀取 512 bytes 的 Header block
                 var totalRead = 0
                 while (totalRead < 512) {
                     bytesRead = inputStream.read(buffer, totalRead, 512 - totalRead)
@@ -89,26 +110,24 @@ object ArchiveHelper {
                 }
                 if (totalRead < 512) break
 
-                // 檢查是否為 Tar 結尾的空 block (連續全為 0)
                 if (buffer.all { it == 0.toByte() }) {
-                    // 通常連續兩個 512 全 0 代表結束
                     break
                 }
 
-                // 檔名：bytes 0..99
                 val rawName = String(buffer, 0, 100, Charsets.UTF_8).trim { it <= ' ' || it == '\u0000' }
                 if (rawName.isEmpty()) continue
 
-                // 檔案大小：bytes 124..135 (Octal ASCII)
                 val rawSize = String(buffer, 124, 12, Charsets.US_ASCII).trim { it <= ' ' || it == '\u0000' }
                 val fileSize = rawSize.toLongOrNull(8) ?: 0L
 
-                // 檔案類型：byte 156 ('0' 或 0 為一般檔案，'5' 為目錄)
                 val typeFlag = buffer[156].toInt().toChar()
                 val isDir = (typeFlag == '5' || rawName.endsWith("/"))
 
-                if (!isDir && (rawName.endsWith(".md") || rawName.endsWith(".txt"))) {
-                    val outFile = File(destDir, rawName)
+                val outFile = if (!isDir && shouldExtractEntry(rawName)) {
+                    resolveSafeOutputFile(destDir, rawName)
+                } else null
+
+                if (outFile != null) {
                     outFile.parentFile?.mkdirs()
                     FileOutputStream(outFile).use { fos ->
                         var remaining = fileSize
@@ -122,11 +141,9 @@ object ArchiveHelper {
                         }
                     }
                 } else {
-                    // 跳過該檔案內容
                     skipBytesFully(inputStream, fileSize)
                 }
 
-                // Tar 規範：每個檔案結尾對齊 512 bytes 邊界
                 val padding = (512 - (fileSize % 512)) % 512
                 if (padding > 0) {
                     skipBytesFully(inputStream, padding)

@@ -414,6 +414,11 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
         }
     }
 
+    var currentNovelId: String = ""
+        private set
+    var currentNovelTitle: String = ""
+        private set
+
     var chapters: List<Chapter> = emptyList()
         private set
     var currentChapterIndex: Int = 0
@@ -760,7 +765,7 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
         val chapter = chapters.getOrNull(currentChapterIndex)
         val metadata = MediaMetadataCompat.Builder()
             .putString(MediaMetadataCompat.METADATA_KEY_TITLE, chapter?.title ?: "小說閱讀")
-            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, repository.currentNovelTitle)
+            .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, currentNovelTitle.ifBlank { "小說有聲閱讀器" })
             .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, "第 ${currentChapterIndex + 1} 章")
             .build()
         mediaSession.setMetadata(metadata)
@@ -888,10 +893,29 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
         list: List<Chapter>,
         initialIndex: Int = 0,
         initialSegmentIndex: Int = 0,
-        startPlay: Boolean = false
+        startPlay: Boolean = false,
+        novelId: String = currentNovelId,
+        novelTitle: String = currentNovelTitle
     ) {
+        currentNovelId = novelId
+        currentNovelTitle = novelTitle
         chapters = list
         loadChapter(initialIndex, startPlay, initialSegmentIndex)
+    }
+
+    /**
+     * 清空目前章節（當書單中所有書籍皆被刪除時呼叫）
+     */
+    fun clearChapters() {
+        stop()
+        currentNovelId = ""
+        currentNovelTitle = ""
+        chapters = emptyList()
+        currentChapterIndex = 0
+        currentContent = null
+        currentSegments = emptyList()
+        currentSegmentIndex = 0
+        updateMediaSessionPlaybackState()
     }
 
     /**
@@ -1234,10 +1258,11 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
 
     fun saveCurrentProgress() {
         val chapter = chapters.getOrNull(currentChapterIndex) ?: return
+        if (currentNovelId.isBlank()) return
         val segment = currentSegments.getOrNull(currentSegmentIndex)
         progressManager.saveProgress(
-            novelId = repository.currentNovelId,
-            novelTitle = repository.currentNovelTitle,
+            novelId = currentNovelId,
+            novelTitle = currentNovelTitle,
             chapterIndex = currentChapterIndex,
             chapterNumber = chapter.chapterNumber,
             chapterTitle = chapter.title,

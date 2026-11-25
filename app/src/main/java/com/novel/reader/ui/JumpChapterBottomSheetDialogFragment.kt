@@ -35,9 +35,14 @@ class JumpChapterBottomSheetDialogFragment(
         binding.tvJumpSubtitle.text = "輸入章號或滑動滑桿快速跳轉 (共 $total 章)"
 
         val curNum = chapters.getOrNull(currentChapterIndex)?.chapterNumber ?: 1
-        binding.sliderChapter.valueFrom = 1f
-        binding.sliderChapter.valueTo = total.toFloat()
-        binding.sliderChapter.value = curNum.toFloat().coerceIn(1f, total.toFloat())
+        if (total <= 1) {
+            binding.sliderChapter.visibility = View.GONE
+        } else {
+            binding.sliderChapter.visibility = View.VISIBLE
+            binding.sliderChapter.valueFrom = 1f
+            binding.sliderChapter.valueTo = total.toFloat()
+            binding.sliderChapter.value = curNum.toFloat().coerceIn(1f, total.toFloat())
+        }
 
         updatePreview(curNum)
 

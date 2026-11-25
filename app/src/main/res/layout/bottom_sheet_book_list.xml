@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:background="@color/bg_card"
+    android:paddingTop="12dp"
+    android:paddingBottom="16dp">
+
+    <!-- 頂部拖曳把手 -->
+    <View
+        android:layout_width="40dp"
+        android:layout_height="4dp"
+        android:layout_gravity="center_horizontal"
+        android:layout_marginBottom="12dp"
+        android:background="@color/divider" />
+
+    <!-- 標題列與匯入按鈕 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingHorizontal="16dp"
+        android:paddingBottom="10dp">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/book_list"
+                android:textColor="@color/text_primary"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tvBookCount"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="共 0 本小說"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnAddBook"
+            style="@style/Widget.Material3.Button.TonalButton"
+            android:layout_width="wrap_content"
+            android:layout_height="38dp"
+            android:text="＋ 匯入小說"
+            android:textSize="12sp"
+            app:cornerRadius="19dp" />
+
+    </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="@color/divider" />
+
+    <!-- 空書單提示 -->
+    <TextView
+        android:id="@+id/tvEmptyBooks"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center"
+        android:paddingVertical="36dp"
+        android:paddingHorizontal="24dp"
+        android:text="書單目前是空的\n點擊右上角「＋ 匯入小說」新增 GitHub、ZIP 或本機目錄"
+        android:textColor="@color/text_secondary"
+        android:textSize="14sp"
+        android:lineSpacingExtra="4dp"
+        android:visibility="gone" />
+
+    <!-- 書單列表 -->
+    <androidx.recyclerview.widget.RecyclerView
+        android:id="@+id/rvBooks"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:maxHeight="420dp"
+        android:paddingHorizontal="12dp"
+        android:paddingTop="8dp"
+        android:clipToPadding="false" />
+
+</LinearLayout>

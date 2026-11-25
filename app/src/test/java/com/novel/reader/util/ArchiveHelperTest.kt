@@ -17,6 +17,9 @@ class ArchiveHelperTest {
     fun testExtractZip() {
         val baos = ByteArrayOutputStream()
         ZipOutputStream(baos).use { zos ->
+            zos.putNextEntry(ZipEntry("book.yaml"))
+            zos.write("project:\n  name: 壓縮檔書名測試\n".toByteArray(Charsets.UTF_8))
+            zos.closeEntry()
             zos.putNextEntry(ZipEntry("chapters/volume1/chap001.md"))
             zos.write("# 第一章\n正文測試".toByteArray(Charsets.UTF_8))
             zos.closeEntry()
@@ -33,6 +36,7 @@ class ArchiveHelperTest {
             val extracted = File(tempDir, "chapters/volume1/chap001.md")
             assertTrue(extracted.exists())
             assertEquals("# 第一章\n正文測試", extracted.readText(Charsets.UTF_8))
+            assertEquals("壓縮檔書名測試", BookMetadataParser.findTitleInDirectory(tempDir))
         } finally {
             tempDir.deleteRecursively()
         }

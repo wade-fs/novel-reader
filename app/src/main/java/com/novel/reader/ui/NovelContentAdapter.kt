@@ -8,10 +8,8 @@ import android.widget.Button
 import android.widget.TextView
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.RecyclerView
-import com.google.android.material.chip.Chip
 import com.novel.reader.R
 import com.novel.reader.model.ChapterContent
-import com.novel.reader.model.WorkRecordCategory
 
 class NovelContentAdapter(
     private val onItemClick: (uiPosition: Int) -> Unit,
@@ -22,16 +20,12 @@ class NovelContentAdapter(
     companion object {
         const val TYPE_TITLE = 0
         const val TYPE_PARAGRAPH = 1
-        const val TYPE_WORK_HEADER = 2
-        const val TYPE_WORK_LINE = 3
         const val TYPE_NAV_FOOTER = 4
     }
 
     sealed class DisplayItem(val uiPosition: Int) {
         class TitleItem(uiPos: Int, val title: String) : DisplayItem(uiPos)
         class ParagraphItem(uiPos: Int, val text: String, val paragraphIndex: Int) : DisplayItem(uiPos)
-        class WorkHeaderItem(uiPos: Int, val header: String, val category: WorkRecordCategory?, val isMainHeader: Boolean) : DisplayItem(uiPos)
-        class WorkLineItem(uiPos: Int, val line: String, val category: WorkRecordCategory?) : DisplayItem(uiPos)
         class NavFooterItem(val hasPrev: Boolean, val hasNext: Boolean) : DisplayItem(-1)
     }
 
@@ -45,25 +39,20 @@ class NovelContentAdapter(
         // 1. 章節標題
         items.add(DisplayItem.TitleItem(uiPos++, chapterContent.title))
 
-        // 2. 正文段落
+        // 2. 正文段落（工作紀錄已於解析階段濾除，絕不顯示）
         chapterContent.bodyParagraphs.forEachIndexed { pIdx, paragraph ->
             items.add(DisplayItem.ParagraphItem(uiPos++, paragraph, pIdx))
         }
 
-        // 3. 工作記錄
-        if (chapterContent.workRecords.isNotEmpty()) {
-            items.add(DisplayItem.WorkHeaderItem(uiPos++, "章後工作紀錄", null, isMainHeader = true))
-            chapterContent.workRecords.forEach { record ->
-                items.add(DisplayItem.WorkHeaderItem(uiPos++, record.headerText, record.category, isMainHeader = false))
-                record.contentLines.forEach { line ->
-                    items.add(DisplayItem.WorkLineItem(uiPos++, line, record.category))
-                }
-            }
-        }
-
-        // 4. 底部上一章/下一章快速換章卡片
+        // 3. 底部上一章/下一章快速換章卡片
         items.add(DisplayItem.NavFooterItem(hasPrev, hasNext))
 
+        activeUiPosition = -1
+        notifyDataSetChanged()
+    }
+
+    fun clearContent() {
+        items.clear()
         activeUiPosition = -1
         notifyDataSetChanged()
     }
@@ -93,8 +82,6 @@ class NovelContentAdapter(
         return when (items[position]) {
             is DisplayItem.TitleItem -> TYPE_TITLE
             is DisplayItem.ParagraphItem -> TYPE_PARAGRAPH
-            is DisplayItem.WorkHeaderItem -> TYPE_WORK_HEADER
-            is DisplayItem.WorkLineItem -> TYPE_WORK_LINE
             is DisplayItem.NavFooterItem -> TYPE_NAV_FOOTER
         }
     }
@@ -109,14 +96,6 @@ class NovelContentAdapter(
             TYPE_PARAGRAPH -> {
                 val view = inflater.inflate(R.layout.item_paragraph, parent, false)
                 ParagraphViewHolder(view)
-            }
-            TYPE_WORK_HEADER -> {
-                val view = inflater.inflate(R.layout.item_work_record_header, parent, false)
-                WorkHeaderViewHolder(view)
-            }
-            TYPE_WORK_LINE -> {
-                val view = inflater.inflate(R.layout.item_work_record_line, parent, false)
-                WorkLineViewHolder(view)
             }
             TYPE_NAV_FOOTER -> {
                 val view = inflater.inflate(R.layout.item_chapter_nav_footer, parent, false)
@@ -146,28 +125,6 @@ class NovelContentAdapter(
                 )
                 holder.itemView.setOnClickListener { onItemClick(item.uiPosition) }
             }
-            is WorkHeaderViewHolder -> {
-                val headerItem = item as DisplayItem.WorkHeaderItem
-                holder.tvHeader.text = headerItem.header
-                if (headerItem.category != null) {
-                    holder.chipTag.visibility = View.VISIBLE
-                    holder.chipTag.text = headerItem.category.displayName
-                } else {
-                    holder.chipTag.visibility = View.GONE
-                }
-                holder.topDivider.visibility = if (headerItem.isMainHeader) View.VISIBLE else View.GONE
-                holder.itemView.setOnClickListener { onItemClick(item.uiPosition) }
-            }
-            is WorkLineViewHolder -> {
-                val lineItem = item as DisplayItem.WorkLineItem
-                holder.tvLine.text = lineItem.line
-                holder.indicator.visibility = if (isSpeaking) View.VISIBLE else View.INVISIBLE
-                holder.container.setBackgroundColor(
-                    if (isSpeaking) ContextCompat.getColor(holder.itemView.context, R.color.highlight_speaking)
-                    else Color.TRANSPARENT
-                )
-                holder.itemView.setOnClickListener { onItemClick(item.uiPosition) }
-            }
             is NavFooterViewHolder -> {
                 val footerItem = item as DisplayItem.NavFooterItem
                 holder.btnPrev.isEnabled = footerItem.hasPrev
@@ -186,18 +143,6 @@ class NovelContentAdapter(
         val container: View = itemView.findViewById(R.id.containerParagraph)
         val indicator: View = itemView.findViewById(R.id.indicatorSpeaking)
         val tvText: TextView = itemView.findViewById(R.id.tvParagraphText)
-    }
-
-    class WorkHeaderViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
-        val topDivider: View = itemView.findViewById(R.id.topDivider)
-        val tvHeader: TextView = itemView.findViewById(R.id.tvWorkRecordHeader)
-        val chipTag: Chip = itemView.findViewById(R.id.chipCategoryTag)
-    }
-
-    class WorkLineViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
-        val container: View = itemView.findViewById(R.id.containerWorkLine)
-        val indicator: View = itemView.findViewById(R.id.indicatorSpeakingLine)
-        val tvLine: TextView = itemView.findViewById(R.id.tvWorkLineText)
     }
 
     class NavFooterViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {

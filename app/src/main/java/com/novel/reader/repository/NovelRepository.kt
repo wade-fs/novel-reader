@@ -7,6 +7,7 @@ import com.novel.reader.model.Chapter
 import com.novel.reader.model.ChapterContent
 import com.novel.reader.parser.NovelChapterParser
 import com.novel.reader.util.ArchiveHelper
+import com.novel.reader.util.BookMetadataParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
@@ -17,28 +18,29 @@ import java.io.InputStreamReader
 class NovelRepository(private val context: Context) {
 
     private val cachedChapters = mutableListOf<Chapter>()
-    var currentNovelId: String = "builtin_yuan"
+    var currentNovelId: String = ""
         private set
-    var currentNovelTitle: String = "元末明初歷史群像 (540章全本)"
+    var currentNovelTitle: String = ""
+        private set
+    var currentNovelLocalPath: String? = null
         private set
 
     /**
-     * 載入內建的小說章節 (優先從 assets/novels/yuan.zip 解壓載入，節省空間與檔案描述符)
+     * 載入內建資產壓縮檔（預設 novels/yuan.zip）。
+     * 優先從解壓後的 book.yaml 讀取書名；缺失時以檔名（去除副檔名）作為書名。
      */
-    suspend fun loadBuiltinNovelChapters(): List<Chapter> = withContext(Dispatchers.IO) {
-        if (cachedChapters.isNotEmpty() && currentNovelId == "builtin_yuan") {
-            return@withContext cachedChapters
-        }
+    suspend fun loadBuiltinNovelChapters(
+        assetPath: String = "novels/yuan.zip",
+        bookId: String = "builtin_${BookMetadataParser.stripFileExtension(assetPath)}"
+    ): List<Chapter> = withContext(Dispatchers.IO) {
+        val targetDir = File(context.filesDir, "builtin_${BookMetadataParser.stripFileExtension(assetPath)}")
+        val markerFile = File(targetDir, ".extracted_v2_ok")
 
-        val targetDir = File(context.filesDir, "builtin_novel")
-        val markerFile = File(targetDir, ".extracted_ok")
-
-        // 若尚未解壓過，則自 assets/novels/yuan.zip 解壓
         if (!markerFile.exists()) {
             targetDir.deleteRecursively()
             targetDir.mkdirs()
             try {
-                context.assets.open("novels/yuan.zip").use { input ->
+                context.assets.open(assetPath).use { input ->
                     ArchiveHelper.extractZip(input, targetDir)
                 }
                 markerFile.createNewFile()
@@ -48,15 +50,42 @@ class NovelRepository(private val context: Context) {
         }
 
         val chapters = scanDirectoryForChapters(targetDir)
+        val resolvedTitle = BookMetadataParser.findTitleInDirectory(targetDir)
+            ?: BookMetadataParser.stripFileExtension(assetPath)
+
         cachedChapters.clear()
         cachedChapters.addAll(chapters)
-        currentNovelId = "builtin_yuan"
-        currentNovelTitle = "元末明初歷史群像"
+        currentNovelId = bookId
+        currentNovelTitle = resolvedTitle
+        currentNovelLocalPath = targetDir.absolutePath
         chapters
     }
 
     /**
-     * 從外部選取的壓縮檔 (.zip, .tar, .tar.gz, .tgz) 匯入並載入章節
+     * 從已儲存的本機實體目錄重新載入章節（用於書單切換已下載/已匯入的書籍）
+     */
+    suspend fun loadLocalDirectoryChapters(
+        dir: File,
+        bookId: String,
+        fallbackTitle: String
+    ): List<Chapter> = withContext(Dispatchers.IO) {
+        if (!dir.exists() || !dir.isDirectory) return@withContext emptyList()
+
+        val chapters = scanDirectoryForChapters(dir)
+        if (chapters.isNotEmpty()) {
+            val resolvedTitle = BookMetadataParser.findTitleInDirectory(dir) ?: fallbackTitle
+            cachedChapters.clear()
+            cachedChapters.addAll(chapters)
+            currentNovelId = bookId
+            currentNovelTitle = resolvedTitle
+            currentNovelLocalPath = dir.absolutePath
+        }
+        chapters
+    }
+
+    /**
+     * 從外部選取的壓縮檔 (.zip, .tar, .tar.gz, .tgz) 匯入並載入章節。
+     * 優先從 book.yaml 取得書名，缺 book.yaml 時使用壓縮檔名（去除副檔名）。
      */
     suspend fun loadArchiveChapters(archiveUri: Uri, fileName: String): List<Chapter> = withContext(Dispatchers.IO) {
         val safeName = fileName.replace(Regex("""[^a-zA-Z0-9_\u4e00-\u9fa5]"""), "_")
@@ -68,20 +97,29 @@ class NovelRepository(private val context: Context) {
             ArchiveHelper.extractArchive(input, fileName, extractDir)
         } ?: false
 
-        if (!success) return@withContext emptyList()
+        if (!success) {
+            extractDir.deleteRecursively()
+            return@withContext emptyList()
+        }
 
         val chapters = scanDirectoryForChapters(extractDir)
         if (chapters.isNotEmpty()) {
+            val resolvedTitle = BookMetadataParser.findTitleInDirectory(extractDir)
+                ?: BookMetadataParser.stripFileExtension(fileName)
             cachedChapters.clear()
             cachedChapters.addAll(chapters)
             currentNovelId = "archive_$safeName"
-            currentNovelTitle = fileName.substringBeforeLast(".")
+            currentNovelTitle = resolvedTitle
+            currentNovelLocalPath = extractDir.absolutePath
+        } else {
+            extractDir.deleteRecursively()
         }
         chapters
     }
 
     /**
-     * 從外部選取的資料夾 (SAF Uri) 載入小說章節
+     * 從外部選取的資料夾 (SAF Uri) 載入小說章節。
+     * 優先從 book.yaml 取得書名，缺 book.yaml 時使用資料夾名稱。
      */
     suspend fun loadCustomDirectoryChapters(treeUri: Uri): List<Chapter> = withContext(Dispatchers.IO) {
         val chapters = mutableListOf<Chapter>()
@@ -110,7 +148,7 @@ class NovelRepository(private val context: Context) {
                     }
                     val num = Regex("""\d+""").find(name)?.value?.toIntOrNull() ?: 0
                     if (num <= 0) continue
-                    val title = readTitleFromUri(file.uri) ?: name.removeSuffix(".md").removeSuffix(".txt")
+                    val title = readTitleFromUri(file.uri) ?: BookMetadataParser.stripFileExtension(name)
                     chapters.add(
                         Chapter(
                             id = file.uri.toString(),
@@ -128,16 +166,20 @@ class NovelRepository(private val context: Context) {
         scanFolder(scanTarget, 1, "目錄")
         chapters.sortBy { it.chapterNumber }
         if (chapters.isNotEmpty()) {
+            val resolvedTitle = BookMetadataParser.findTitleInDocumentDir(rootDoc, context)
+                ?: rootDoc.name
+                ?: "外部小說目錄"
             cachedChapters.clear()
             cachedChapters.addAll(chapters)
-            currentNovelId = "folder_${treeUri.hashCode()}"
-            currentNovelTitle = rootDoc.name ?: "外部小說目錄"
+            currentNovelId = "folder_${treeUri.toString().hashCode()}"
+            currentNovelTitle = resolvedTitle
+            currentNovelLocalPath = null
         }
         chapters
     }
 
     /**
-     * 掃描本機實體目錄下的所有章節 markdown 檔案
+     * 掃描本機實體目錄下的所有章節 markdown / txt 檔案
      */
     private fun scanDirectoryForChapters(baseDir: File): List<Chapter> {
         val chapters = mutableListOf<Chapter>()
@@ -161,7 +203,6 @@ class NovelRepository(private val context: Context) {
                 file.listFiles()?.forEach { scan(it, vIdx, vName) }
             } else if (file.isFile && (file.name.endsWith(".md") || file.name.endsWith(".txt"))) {
                 val lower = file.name.lowercase()
-                // 排除純規則說明與設定文件
                 if (lower.contains("rules") || lower.contains("outline") || lower.contains("readme") ||
                     lower.contains("character") || lower.contains("timeline") || lower.contains("geography") ||
                     lower.contains("audit") || lower.contains("ledger") || lower.contains("bible") ||
@@ -170,9 +211,10 @@ class NovelRepository(private val context: Context) {
                     file.name.matches(Regex("""^volume\d+\.md$""", RegexOption.IGNORE_CASE))) {
                     return
                 }
-                val num = Regex("""\d+""").find(file.name)?.value?.toIntOrNull() ?: 0
+                val num = Regex("""\d+""").find(file.name)?.value?.toIntOrNull()
+                    ?: if (baseDir.listFiles()?.count { it.isFile && (it.name.endsWith(".md") || it.name.endsWith(".txt")) } == 1) 1 else 0
                 if (num <= 0) return
-                val title = readTitleFromFile(file) ?: "第 ${num} 章"
+                val title = readTitleFromFile(file) ?: BookMetadataParser.stripFileExtension(file.name)
                 chapters.add(
                     Chapter(
                         id = file.absolutePath,

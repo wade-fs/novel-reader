@@ -12,7 +12,6 @@ import com.novel.reader.R
 import com.novel.reader.databinding.BottomSheetSettingsBinding
 import com.novel.reader.model.ReadingSettings
 import com.novel.reader.model.VoiceGender
-import com.novel.reader.model.WorkRecordCategory
 
 class SettingsBottomSheetDialogFragment(
     private var settings: ReadingSettings,
@@ -40,22 +39,17 @@ class SettingsBottomSheetDialogFragment(
     }
 
     private fun setupViews() {
-        // 1. 預設模式切換
+        // 1. 朗讀模式切換（讀章名+正文 / 只讀正文）
         binding.chipGroupPresetModes.setOnCheckedStateChangeListener { _, checkedIds ->
             if (isUpdatingUi) return@setOnCheckedStateChangeListener
             when (checkedIds.firstOrNull()) {
-                R.id.chipModeFull -> {
-                    settings.filterConfig.setFullMode()
+                R.id.chipModeTitleAndBody -> {
+                    settings.filterConfig.setTitleAndBodyMode()
                     notifyChange()
                     syncFilterUi()
                 }
                 R.id.chipModeBodyOnly -> {
                     settings.filterConfig.setBodyOnlyMode()
-                    notifyChange()
-                    syncFilterUi()
-                }
-                R.id.chipModeTitleAndBody -> {
-                    settings.filterConfig.setTitleAndBodyMode()
                     notifyChange()
                     syncFilterUi()
                 }
@@ -134,7 +128,7 @@ class SettingsBottomSheetDialogFragment(
             notifyChange()
         }
 
-        // 5. 細項過濾開關
+        // 5. 是否朗讀章名
         binding.switchReadTitle.setOnCheckedChangeListener { _, isChecked ->
             if (isUpdatingUi) return@setOnCheckedChangeListener
             settings.filterConfig.readChapterTitle = isChecked
@@ -142,41 +136,8 @@ class SettingsBottomSheetDialogFragment(
             updatePresetChipsSelection()
         }
 
-        binding.switchReadBody.setOnCheckedChangeListener { _, isChecked ->
-            if (isUpdatingUi) return@setOnCheckedChangeListener
-            settings.filterConfig.readBody = isChecked
-            notifyChange()
-            updatePresetChipsSelection()
-        }
-
-        binding.switchReadWorkRecord.setOnCheckedChangeListener { _, isChecked ->
-            if (isUpdatingUi) return@setOnCheckedChangeListener
-            settings.filterConfig.readWorkRecords = isChecked
-            binding.layoutWorkRecordCategories.visibility = if (isChecked) View.VISIBLE else View.GONE
-            notifyChange()
-            updatePresetChipsSelection()
-        }
-
-        // 工作記錄各分類勾選
-        setupCategoryCheckbox(binding.cbHistory, WorkRecordCategory.HISTORICAL_FACTS)
-        setupCategoryCheckbox(binding.cbVerification, WorkRecordCategory.PENDING_VERIFICATION)
-        setupCategoryCheckbox(binding.cbInference, WorkRecordCategory.INFERENCE)
-        setupCategoryCheckbox(binding.cbFiction, WorkRecordCategory.FICTION)
-        setupCategoryCheckbox(binding.cbContinuity, WorkRecordCategory.CONTINUITY)
-        setupCategoryCheckbox(binding.cbTransition, WorkRecordCategory.TRANSITION)
-        setupCategoryCheckbox(binding.cbOther, WorkRecordCategory.OTHER)
-
         binding.btnDone.setOnClickListener {
             dismiss()
-        }
-    }
-
-    private fun setupCategoryCheckbox(checkBox: android.widget.CheckBox, category: WorkRecordCategory) {
-        checkBox.setOnCheckedChangeListener { _, isChecked ->
-            if (isUpdatingUi) return@setOnCheckedChangeListener
-            settings.filterConfig.setCategoryEnabled(category, isChecked)
-            notifyChange()
-            updatePresetChipsSelection()
         }
     }
 
@@ -214,34 +175,16 @@ class SettingsBottomSheetDialogFragment(
 
     private fun syncFilterUi() {
         isUpdatingUi = true
-        val filter = settings.filterConfig
-        binding.switchReadTitle.isChecked = filter.readChapterTitle
-        binding.switchReadBody.isChecked = filter.readBody
-        binding.switchReadWorkRecord.isChecked = filter.readWorkRecords
-        binding.layoutWorkRecordCategories.visibility = if (filter.readWorkRecords) View.VISIBLE else View.GONE
-
-        binding.cbHistory.isChecked = filter.readHistoricalFacts
-        binding.cbVerification.isChecked = filter.readPendingVerification
-        binding.cbInference.isChecked = filter.readInference
-        binding.cbFiction.isChecked = filter.readFiction
-        binding.cbContinuity.isChecked = filter.readContinuity
-        binding.cbTransition.isChecked = filter.readTransition
-        binding.cbOther.isChecked = filter.readOtherWorkRecords
-
+        binding.switchReadTitle.isChecked = settings.filterConfig.readChapterTitle
         updatePresetChipsSelection()
         isUpdatingUi = false
     }
 
     private fun updatePresetChipsSelection() {
-        when {
-            settings.filterConfig.isFull -> binding.chipModeFull.isChecked = true
-            settings.filterConfig.isBodyOnly -> binding.chipModeBodyOnly.isChecked = true
-            settings.filterConfig.readChapterTitle && settings.filterConfig.readBody && !settings.filterConfig.readWorkRecords -> {
-                binding.chipModeTitleAndBody.isChecked = true
-            }
-            else -> {
-                binding.chipGroupPresetModes.clearCheck()
-            }
+        if (settings.filterConfig.readChapterTitle) {
+            binding.chipModeTitleAndBody.isChecked = true
+        } else {
+            binding.chipModeBodyOnly.isChecked = true
         }
     }
 

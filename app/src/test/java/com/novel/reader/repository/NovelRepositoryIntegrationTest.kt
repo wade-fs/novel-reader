@@ -98,4 +98,36 @@ class NovelRepositoryIntegrationTest {
         assertEquals(1, chapters.first().first)
         assertTrue(chapters.first().second.contains("乾清宮密霧"))
     }
+
+    @Test
+    fun testRealChaptersSceneDividersAndWorkRecordFiltering() {
+        val sexChap1 = File(novelRootDir, "sex/chapters/volume1/chap001.md")
+        if (sexChap1.exists()) {
+            val parsed = NovelChapterParser.parse(sexChap1.readText(Charsets.UTF_8))
+            assertTrue("sex chap001 不應有任何工作紀錄", parsed.workRecords.isEmpty())
+            val joined = parsed.bodyParagraphs.joinToString("\n")
+            assertTrue("sex chap001 應保留 --- 之後的正文內容", joined.contains("靈脈枯竭，青雲之殤"))
+            assertTrue("sex chap001 應保留最後場景內容", joined.contains("道心叩問，自願的抉擇"))
+            assertFalse("不應出現章後工作紀錄字樣", joined.contains("章後工作紀錄"))
+        }
+
+        val yuanChap1 = File(novelRootDir, "yuan/chapters/volume1/chap001.md")
+        if (yuanChap1.exists()) {
+            val parsed = NovelChapterParser.parse(yuanChap1.readText(Charsets.UTF_8))
+            assertTrue("yuan chap001 工作紀錄應完全濾除", parsed.workRecords.isEmpty())
+            val joined = parsed.bodyParagraphs.joinToString("\n")
+            assertTrue("yuan chap001 應保留正文結尾", joined.contains("一寸寸坍塌瓦解"))
+            assertFalse("yuan chap001 不應包含史實骨架", joined.contains("史實骨架"))
+            assertFalse("yuan chap001 不應包含章後工作紀錄", joined.contains("章後工作紀錄"))
+        }
+
+        val mingChap1 = File(novelRootDir, "ming/chapters/volume1/chap001.md")
+        if (mingChap1.exists()) {
+            val parsed = NovelChapterParser.parse(mingChap1.readText(Charsets.UTF_8))
+            assertTrue("ming chap001 工作紀錄應完全濾除", parsed.workRecords.isEmpty())
+            val joined = parsed.bodyParagraphs.joinToString("\n")
+            assertTrue("ming chap001 應保留正文結尾", joined.contains("宣信王入邸"))
+            assertFalse("ming chap001 不應包含史實骨架", joined.contains("史實骨架"))
+        }
+    }
 }

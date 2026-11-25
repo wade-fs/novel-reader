@@ -4,141 +4,116 @@ import com.novel.reader.model.*
 
 object NovelChapterParser {
 
-    private val TITLE_REGEX = Regex("""^#\s+(.+)$""", RegexOption.MULTILINE)
-    private val WORK_RECORD_HEADER_REGEX = Regex("""^##\s+.*(工作紀錄|工作记录|章後紀錄|章后记录).*$""", RegexOption.MULTILINE)
+    private val TITLE_REGEX = Regex("""^#\s+(.+)$""")
+    private val HORIZONTAL_RULE_REGEX = Regex("""^[-*_]{3,}\s*$""")
+
+    // 匹配真正的章後工作紀錄大標題或分類標題（絕不將純分隔線 --- 誤判為工作紀錄）
+    private val WORK_RECORD_HEADING_REGEX = Regex(
+        """^#{1,6}\s*.*(工作紀錄|工作记录|章後紀錄|章后记录|考據與工作|考据与工作|寫作紀錄|写作记录|創作紀錄|创作记录).*$"""
+    )
+    private val WORK_RECORD_CATEGORY_HEADING_REGEX = Regex(
+        """^#{1,6}\s*【?(史實骨架|史實依據|史实骨架|史实依据|待核事項|待核事项|合理推演|小說虛構|小说虚构|連續性變更|连续性变更|後續銜接|后续衔接)】?[:：]?\s*$"""
+    )
+    private val WORK_RECORD_BULLET_OR_BOLD_REGEX = Regex(
+        """^(?:[-*]\s+)?\*{0,2}【(?:章後工作紀錄|本章工作紀錄|工作紀錄|工作记录|章後紀錄|章后记录|史實骨架|史實依據|史实骨架|史实依据|待核事項|待核事项|合理推演|小說虛構|小说虚构|連續性變更|连续性变更|後續銜接|后续衔接)】[:：]?\*{0,2}(?:[:：].*)?$"""
+    )
+    private val WORK_RECORD_BOLD_TITLE_REGEX = Regex(
+        """^\*{2}【?(?:章後工作紀錄|本章工作紀錄|工作紀錄|工作记录|章後紀錄|章后记录|歷史考據與工作紀錄|历史考据与工作记录)】?[:：]?\*{2}\s*$"""
+    )
+    private val BODY_SUBHEADING_REGEX = Regex("""^#{2,6}\s+(.+)$""")
 
     /**
-     * 解析 Markdown 文章全文為結構化的 ChapterContent
+     * 判斷該行是否為章後工作紀錄區塊的起點
+     */
+    fun isWorkRecordStart(trimmedLine: String): Boolean {
+        if (trimmedLine.isEmpty()) return false
+        return WORK_RECORD_HEADING_REGEX.matches(trimmedLine) ||
+                WORK_RECORD_CATEGORY_HEADING_REGEX.matches(trimmedLine) ||
+                WORK_RECORD_BULLET_OR_BOLD_REGEX.matches(trimmedLine) ||
+                WORK_RECORD_BOLD_TITLE_REGEX.matches(trimmedLine)
+    }
+
+    /**
+     * 解析 Markdown 文章全文為結構化的 ChapterContent。
+     * 所有章後工作紀錄一律過濾不顯示、不朗讀；正文中的場景分隔線 (--- / ***) 僅作為段落分隔，不影響後續正文。
      */
     fun parse(rawMarkdown: String): ChapterContent {
         val lines = rawMarkdown.lines()
         var title = ""
         val bodyParagraphs = mutableListOf<String>()
-        val workRecords = mutableListOf<WorkRecordItem>()
-
-        var inWorkRecordSection = false
-        var currentCategory: WorkRecordCategory? = null
-        var currentCategoryHeader = ""
-        var currentCategoryLines = mutableListOf<String>()
-
         val currentParagraphBuilder = StringBuilder()
+
+        fun flushParagraph() {
+            if (currentParagraphBuilder.isNotBlank()) {
+                val rawPara = currentParagraphBuilder.toString().trim()
+                val cleaned = cleanMarkdownSymbols(rawPara)
+                if (cleaned.isNotBlank()) {
+                    bodyParagraphs.add(cleaned)
+                }
+                currentParagraphBuilder.clear()
+            }
+        }
 
         for (line in lines) {
             val trimmed = line.trim()
 
-            // 1. 識別章節標題 (# 第一章 ...)
+            // 1. 識別章節主標題 (# 第一章 ...)
             if (title.isEmpty() && trimmed.startsWith("# ")) {
                 val match = TITLE_REGEX.find(trimmed)
                 title = cleanMarkdownSymbols(match?.groupValues?.get(1)?.trim() ?: trimmed.removePrefix("#").trim())
                 continue
             }
 
-            // 2. 識別章後工作紀錄分隔線或大標題
-            if (trimmed == "---" || trimmed == "***" || WORK_RECORD_HEADER_REGEX.matches(trimmed)) {
-                if (currentParagraphBuilder.isNotBlank()) {
-                    bodyParagraphs.add(currentParagraphBuilder.toString().trim())
-                    currentParagraphBuilder.clear()
-                }
-                inWorkRecordSection = true
+            // 2. 遇到真正的章後工作紀錄區塊：一律濾除後續所有工作紀錄內容
+            if (isWorkRecordStart(trimmed)) {
+                flushParagraph()
+                break
+            }
+
+            // 3. 正文中的場景分隔線 (--- / *** / ___)：僅結束當前段落，不截斷後續正文
+            if (HORIZONTAL_RULE_REGEX.matches(trimmed)) {
+                flushParagraph()
                 continue
             }
 
-            if (!inWorkRecordSection) {
-                // 正文部分
-                if (trimmed.isEmpty()) {
-                    if (currentParagraphBuilder.isNotBlank()) {
-                        bodyParagraphs.add(currentParagraphBuilder.toString().trim())
-                        currentParagraphBuilder.clear()
-                    }
-                } else {
-                    if (currentParagraphBuilder.isNotEmpty()) {
-                        currentParagraphBuilder.append("\n")
-                    }
-                    currentParagraphBuilder.append(trimmed)
-                }
-            } else {
-                // 章後工作紀錄部分
-                if (trimmed.isEmpty()) continue
-
-                // 檢查是否為新分類標題 (如: - **【史實骨架】：**)
-                val cleanedLine = cleanMarkdownSymbols(trimmed.removePrefix("-").removePrefix("*").trim())
-                val matchedCat = WorkRecordCategory.matchCategory(cleanedLine)
-                val isCategoryHeader = matchedCat != null && (
-                        trimmed.startsWith("-") || trimmed.startsWith("*") ||
-                        trimmed.contains("【") || trimmed.contains("：")
-                ) && (
-                        cleanedLine.endsWith("：") || cleanedLine.endsWith(":") ||
-                        cleanedLine.startsWith("【") || cleanedLine.startsWith("史實") ||
-                        cleanedLine.startsWith("待核") || cleanedLine.startsWith("合理推演") ||
-                        cleanedLine.startsWith("小說虛構") || cleanedLine.startsWith("連續性") ||
-                        cleanedLine.startsWith("後續銜接")
-                )
-
-                if (isCategoryHeader && matchedCat != null) {
-                    // 儲存前一個分類
-                    if (currentCategory != null && (currentCategoryHeader.isNotBlank() || currentCategoryLines.isNotEmpty())) {
-                        workRecords.add(
-                            WorkRecordItem(
-                                category = currentCategory,
-                                headerText = currentCategoryHeader,
-                                contentLines = ArrayList(currentCategoryLines)
-                            )
-                        )
-                        currentCategoryLines.clear()
-                    }
-
-                    currentCategory = matchedCat
-                    val colonIndex = cleanedLine.indexOfFirst { it == '：' || it == ':' }
-                    if (colonIndex != -1) {
-                        currentCategoryHeader = cleanedLine.substring(0, colonIndex).replace("【", "").replace("】", "").trim()
-                        val remainder = cleanedLine.substring(colonIndex + 1).trim()
-                        if (remainder.isNotEmpty()) {
-                            currentCategoryLines.add(remainder)
-                        }
-                    } else {
-                        currentCategoryHeader = cleanedLine.replace("【", "").replace("】", "").trim()
-                    }
-                } else {
-                    // 分類底下的條目內容 (如: - 《元史...》)
-                    val cleaned = cleanMarkdownSymbols(trimmed.removePrefix("-").removePrefix("*").trim())
-                    if (cleaned.isNotEmpty()) {
-                        if (currentCategory == null) {
-                            currentCategory = WorkRecordCategory.OTHER
-                            currentCategoryHeader = "工作紀錄"
-                        }
-                        currentCategoryLines.add(cleaned)
-                    }
-                }
+            // 4. 空行：結束當前段落
+            if (trimmed.isEmpty()) {
+                flushParagraph()
+                continue
             }
+
+            // 5. 正文內部的章節小標 (如 ### 二、靈脈枯竭，青雲之殤)：獨立成段並清除 # 符號
+            val subheadingMatch = BODY_SUBHEADING_REGEX.find(trimmed)
+            if (subheadingMatch != null) {
+                flushParagraph()
+                val cleanedSub = cleanMarkdownSymbols(subheadingMatch.groupValues[1])
+                if (cleanedSub.isNotBlank()) {
+                    bodyParagraphs.add(cleanedSub)
+                }
+                continue
+            }
+
+            // 6. 一般正文段落
+            if (currentParagraphBuilder.isNotEmpty()) {
+                currentParagraphBuilder.append("\n")
+            }
+            currentParagraphBuilder.append(trimmed)
         }
 
         // 收尾正文最後一段
-        if (currentParagraphBuilder.isNotBlank()) {
-            bodyParagraphs.add(currentParagraphBuilder.toString().trim())
-        }
-
-        // 收尾最後一個工作紀錄分類
-        if (currentCategory != null && (currentCategoryHeader.isNotBlank() || currentCategoryLines.isNotEmpty())) {
-            workRecords.add(
-                WorkRecordItem(
-                    category = currentCategory,
-                    headerText = currentCategoryHeader,
-                    contentLines = ArrayList(currentCategoryLines)
-                )
-            )
-        }
+        flushParagraph()
 
         return ChapterContent(
             title = title.ifEmpty { "章節" },
             bodyParagraphs = bodyParagraphs,
-            workRecords = workRecords,
+            workRecords = emptyList(),
             rawMarkdown = rawMarkdown
         )
     }
 
     /**
-     * 依照使用者的 ReadingFilterConfig 生成 TTS 朗讀單元序列
-     * 支援「預設每個字都讀」、「設定要不要讀章名」、「只讀正文」、「單獨開啟/關閉工作紀錄項目」
+     * 依照使用者的 ReadingFilterConfig 生成 TTS 朗讀單元序列。
+     * 一律只讀本文（可選是否朗讀章名），完全不包含工作紀錄。
      */
     fun buildTtsSegments(
         chapterContent: ChapterContent,
@@ -150,88 +125,39 @@ object NovelChapterParser {
         // 1. 章名
         if (filterConfig.readChapterTitle && chapterContent.title.isNotBlank()) {
             val cleanTitle = cleanMarkdownSymbols(chapterContent.title)
-            segments.add(
-                TtsSegment(
-                    id = "title",
-                    type = SegmentType.CHAPTER_TITLE,
-                    displayText = chapterContent.title,
-                    speechText = cleanSpeechText(cleanTitle),
-                    uiPosition = uiPos
-                )
-            )
-        }
-        uiPos++ // 章名佔據 UI 位置 0
-
-        // 2. 正文各段落
-        chapterContent.bodyParagraphs.forEachIndexed { index, paragraph ->
-            if (filterConfig.readBody && paragraph.isNotBlank()) {
-                val cleanPara = cleanMarkdownSymbols(paragraph)
+            val speechTitle = cleanSpeechText(cleanTitle)
+            if (speechTitle.isNotBlank()) {
                 segments.add(
                     TtsSegment(
-                        id = "body_$index",
-                        type = SegmentType.BODY_PARAGRAPH,
-                        displayText = paragraph,
-                        speechText = cleanSpeechText(cleanPara),
+                        id = "title",
+                        type = SegmentType.CHAPTER_TITLE,
+                        displayText = chapterContent.title,
+                        speechText = speechTitle,
                         uiPosition = uiPos
                     )
                 )
             }
-            uiPos++
         }
+        uiPos++ // 章名佔據 UI 位置 0
 
-        // 3. 章後工作紀錄
-        if (filterConfig.readWorkRecords && chapterContent.workRecords.isNotEmpty()) {
-            // 工作紀錄總標題
-            segments.add(
-                TtsSegment(
-                    id = "work_records_header",
-                    type = SegmentType.WORK_RECORD_HEADER,
-                    category = WorkRecordCategory.OTHER,
-                    displayText = "章後工作紀錄",
-                    speechText = "章後工作紀錄。",
-                    uiPosition = uiPos
-                )
-            )
-            uiPos++
-
-            // 工作紀錄各分類項目
-            chapterContent.workRecords.forEachIndexed { secIdx, item ->
-                if (filterConfig.isCategoryEnabled(item.category)) {
-                    // 分類小標 (如: 史實骨架)
-                    val headerSpeech = "${item.headerText}。"
+        // 2. 正文各段落（一律朗讀本文）
+        chapterContent.bodyParagraphs.forEachIndexed { index, paragraph ->
+            if (paragraph.isNotBlank()) {
+                val cleanPara = cleanMarkdownSymbols(paragraph)
+                val speechPara = cleanSpeechText(cleanPara)
+                if (speechPara.isNotBlank()) {
                     segments.add(
                         TtsSegment(
-                            id = "work_${secIdx}_header",
-                            type = SegmentType.WORK_RECORD_HEADER,
-                            category = item.category,
-                            displayText = item.headerText,
-                            speechText = cleanSpeechText(headerSpeech),
+                            id = "body_$index",
+                            type = SegmentType.BODY_PARAGRAPH,
+                            displayText = paragraph,
+                            speechText = speechPara,
                             uiPosition = uiPos
                         )
                     )
-                    uiPos++
-
-                    // 條目內容
-                    item.contentLines.forEachIndexed { lineIdx, line ->
-                        if (line.isNotBlank()) {
-                            segments.add(
-                                TtsSegment(
-                                    id = "work_${secIdx}_line_$lineIdx",
-                                    type = SegmentType.WORK_RECORD_CONTENT,
-                                    category = item.category,
-                                    displayText = line,
-                                    speechText = cleanSpeechText(line),
-                                    uiPosition = uiPos
-                                )
-                            )
-                            uiPos++
-                        }
-                    }
-                } else {
-                    // 如果該分類被過濾，UI 上的條目位置仍對齊
-                    uiPos += 1 + item.contentLines.size
                 }
             }
+            uiPos++
         }
 
         return segments
@@ -246,7 +172,7 @@ object NovelChapterParser {
             .replace("**", "")
             .replace("*", "")
             .replace("`", "")
-            .replace(Regex("""^#+\s*"""), "")
+            .replace(Regex("""^#+\s*""", RegexOption.MULTILINE), "")
             .trim()
     }
 

@@ -32,6 +32,8 @@ class ReadingProgressManager(context: Context) {
         private const val KEY_UI_POSITION = "ui_position"
         private const val KEY_TIMESTAMP = "timestamp"
 
+        private const val PREFIX_BOOK = "book_prog_"
+
         // Settings keys
         private const val KEY_SPEED = "setting_speed"
         private const val KEY_PITCH = "setting_pitch"
@@ -39,21 +41,12 @@ class ReadingProgressManager(context: Context) {
         private const val KEY_VOICE_NAME = "setting_voice_name"
         private const val KEY_AUTO_NEXT = "setting_auto_next"
 
-        // Filter keys
+        // Filter keys（僅保留是否朗讀章名，工作紀錄一律濾除）
         private const val KEY_FILTER_TITLE = "filter_read_title"
-        private const val KEY_FILTER_BODY = "filter_read_body"
-        private const val KEY_FILTER_WORK_RECORD = "filter_read_work_record"
-        private const val KEY_FILTER_HISTORY = "filter_read_history"
-        private const val KEY_FILTER_VERIFY = "filter_read_verify"
-        private const val KEY_FILTER_INFERENCE = "filter_read_inference"
-        private const val KEY_FILTER_FICTION = "filter_read_fiction"
-        private const val KEY_FILTER_CONTINUITY = "filter_read_continuity"
-        private const val KEY_FILTER_TRANSITION = "filter_read_transition"
-        private const val KEY_FILTER_OTHER = "filter_read_other"
     }
 
     /**
-     * 儲存目前的朗讀進度 (章節、段落、時間戳記)
+     * 儲存目前的朗讀進度（同時記錄全域最後進度與每本書各自的閱讀進度）
      */
     fun saveProgress(
         novelId: String,
@@ -64,6 +57,9 @@ class ReadingProgressManager(context: Context) {
         segmentIndex: Int,
         uiPosition: Int
     ) {
+        if (novelId.isBlank()) return
+        val now = System.currentTimeMillis()
+        val p = "${PREFIX_BOOK}${novelId}_"
         prefs.edit()
             .putBoolean(KEY_HAS_PROGRESS, true)
             .putString(KEY_NOVEL_ID, novelId)
@@ -73,17 +69,28 @@ class ReadingProgressManager(context: Context) {
             .putString(KEY_CHAPTER_TITLE, chapterTitle)
             .putInt(KEY_SEGMENT_INDEX, segmentIndex)
             .putInt(KEY_UI_POSITION, uiPosition)
-            .putLong(KEY_TIMESTAMP, System.currentTimeMillis())
+            .putLong(KEY_TIMESTAMP, now)
+            // 每本書獨立進度
+            .putBoolean("${p}has", true)
+            .putString("${p}title", novelTitle)
+            .putInt("${p}chap_idx", chapterIndex)
+            .putInt("${p}chap_num", chapterNumber)
+            .putString("${p}chap_title", chapterTitle)
+            .putInt("${p}seg_idx", segmentIndex)
+            .putInt("${p}ui_pos", uiPosition)
+            .putLong("${p}ts", now)
             .apply()
     }
 
     /**
-     * 取得已儲存的朗讀進度
+     * 取得最近一次儲存的朗讀進度
      */
     fun getSavedProgress(): SavedReadingProgress? {
         if (!prefs.getBoolean(KEY_HAS_PROGRESS, false)) return null
+        val id = prefs.getString(KEY_NOVEL_ID, "") ?: ""
+        if (id.isBlank()) return null
         return SavedReadingProgress(
-            novelId = prefs.getString(KEY_NOVEL_ID, "") ?: "",
+            novelId = id,
             novelTitle = prefs.getString(KEY_NOVEL_TITLE, "") ?: "",
             chapterIndex = prefs.getInt(KEY_CHAPTER_INDEX, 0),
             chapterNumber = prefs.getInt(KEY_CHAPTER_NUMBER, 1),
@@ -95,26 +102,59 @@ class ReadingProgressManager(context: Context) {
     }
 
     /**
+     * 取得特定書籍的獨立朗讀進度
+     */
+    fun getSavedProgressForBook(novelId: String): SavedReadingProgress? {
+        val p = "${PREFIX_BOOK}${novelId}_"
+        if (prefs.getBoolean("${p}has", false)) {
+            return SavedReadingProgress(
+                novelId = novelId,
+                novelTitle = prefs.getString("${p}title", "") ?: "",
+                chapterIndex = prefs.getInt("${p}chap_idx", 0),
+                chapterNumber = prefs.getInt("${p}chap_num", 1),
+                chapterTitle = prefs.getString("${p}chap_title", "") ?: "",
+                segmentIndex = prefs.getInt("${p}seg_idx", 0),
+                uiPosition = prefs.getInt("${p}ui_pos", 0),
+                timestamp = prefs.getLong("${p}ts", 0L)
+            )
+        }
+        val latest = getSavedProgress()
+        return if (latest?.novelId == novelId) latest else null
+    }
+
+    /**
+     * 清除特定書籍的朗讀進度（刪除書單時使用）
+     */
+    fun clearProgressForBook(novelId: String) {
+        val p = "${PREFIX_BOOK}${novelId}_"
+        val editor = prefs.edit()
+            .remove("${p}has")
+            .remove("${p}title")
+            .remove("${p}chap_idx")
+            .remove("${p}chap_num")
+            .remove("${p}chap_title")
+            .remove("${p}seg_idx")
+            .remove("${p}ui_pos")
+            .remove("${p}ts")
+        if (prefs.getString(KEY_NOVEL_ID, "") == novelId) {
+            editor.putBoolean(KEY_HAS_PROGRESS, false)
+                .remove(KEY_NOVEL_ID)
+                .remove(KEY_NOVEL_TITLE)
+        }
+        editor.apply()
+    }
+
+    /**
      * 儲存語音與章節過濾偏好設定
      */
     fun saveSettings(settings: ReadingSettings) {
-        val f = settings.filterConfig
         prefs.edit()
             .putFloat(KEY_SPEED, settings.speechRate)
             .putFloat(KEY_PITCH, settings.pitch)
             .putString(KEY_GENDER, settings.gender.name)
             .putString(KEY_VOICE_NAME, settings.selectedVoiceName)
             .putBoolean(KEY_AUTO_NEXT, settings.autoNextChapter)
-            .putBoolean(KEY_FILTER_TITLE, f.readChapterTitle)
-            .putBoolean(KEY_FILTER_BODY, f.readBody)
-            .putBoolean(KEY_FILTER_WORK_RECORD, f.readWorkRecords)
-            .putBoolean(KEY_FILTER_HISTORY, f.readHistoricalFacts)
-            .putBoolean(KEY_FILTER_VERIFY, f.readPendingVerification)
-            .putBoolean(KEY_FILTER_INFERENCE, f.readInference)
-            .putBoolean(KEY_FILTER_FICTION, f.readFiction)
-            .putBoolean(KEY_FILTER_CONTINUITY, f.readContinuity)
-            .putBoolean(KEY_FILTER_TRANSITION, f.readTransition)
-            .putBoolean(KEY_FILTER_OTHER, f.readOtherWorkRecords)
+            .putBoolean(KEY_FILTER_TITLE, settings.filterConfig.readChapterTitle)
             .apply()
     }
 
@@ -130,16 +170,7 @@ class ReadingProgressManager(context: Context) {
         }
 
         val filter = ReadingFilterConfig(
-            readChapterTitle = prefs.getBoolean(KEY_FILTER_TITLE, true),
-            readBody = prefs.getBoolean(KEY_FILTER_BODY, true),
-            readWorkRecords = prefs.getBoolean(KEY_FILTER_WORK_RECORD, true),
-            readHistoricalFacts = prefs.getBoolean(KEY_FILTER_HISTORY, true),
-            readPendingVerification = prefs.getBoolean(KEY_FILTER_VERIFY, true),
-            readInference = prefs.getBoolean(KEY_FILTER_INFERENCE, true),
-            readFiction = prefs.getBoolean(KEY_FILTER_FICTION, true),
-            readContinuity = prefs.getBoolean(KEY_FILTER_CONTINUITY, true),
-            readTransition = prefs.getBoolean(KEY_FILTER_TRANSITION, true),
-            readOtherWorkRecords = prefs.getBoolean(KEY_FILTER_OTHER, true)
+            readChapterTitle = prefs.getBoolean(KEY_FILTER_TITLE, true)
         )
 
         return ReadingSettings(
