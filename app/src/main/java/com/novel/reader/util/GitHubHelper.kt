@@ -1,6 +1,7 @@
 package com.novel.reader.util
 
 import android.content.Context
+import com.novel.reader.model.BookMetadata
 import com.novel.reader.model.Chapter
 import com.novel.reader.parser.NovelChapterParser
 import kotlinx.coroutines.Dispatchers
@@ -65,7 +66,8 @@ sealed class GitHubLoadResult {
         val isSingleChapter: Boolean,
         val bookId: String,
         val localDirPath: String,
-        val sourceUrl: String
+        val sourceUrl: String,
+        val metadata: BookMetadata = BookMetadata(title = title)
     ) : GitHubLoadResult()
 
     data class Error(val message: String) : GitHubLoadResult()
@@ -180,14 +182,14 @@ object GitHubHelper {
             val file = File(targetDir, fileName)
             file.writeText(body, Charsets.UTF_8)
 
-            // 嘗試抓取所屬目錄的 book.yaml 以取得正式書名
-            var yamlTitle: String? = null
+            // 嘗試抓取所屬目錄的 book.yaml 以取得完整書籍資訊
+            var parsedMeta: BookMetadata? = null
             for (yamlUrl in info.inferredBookYamlRawUrls) {
                 val yamlContent = fetchOptionalText(yamlUrl)
                 if (!yamlContent.isNullOrBlank()) {
-                    val parsedYamlTitle = BookMetadataParser.parseTitle(yamlContent)
-                    if (!parsedYamlTitle.isNullOrBlank()) {
-                        yamlTitle = parsedYamlTitle
+                    val meta = BookMetadataParser.parseMetadata(yamlContent)
+                    if (meta.title.isNotBlank() || meta.subtitle.isNotBlank()) {
+                        parsedMeta = meta
                         File(targetDir, "book.yaml").writeText(yamlContent, Charsets.UTF_8)
                         break
                     }
@@ -206,7 +208,9 @@ object GitHubHelper {
             )
 
             // 優先使用 book.yaml 書名；缺 book.yaml 時使用檔案名（去除副檔名）
-            val novelTitle = yamlTitle ?: BookMetadataParser.stripFileExtension(fileName)
+            val novelTitle = parsedMeta?.title?.takeIf { it.isNotBlank() }
+                ?: BookMetadataParser.stripFileExtension(fileName)
+            val finalMeta = (parsedMeta ?: BookMetadata()).copy(title = novelTitle)
 
             GitHubLoadResult.Success(
                 chapters = listOf(chapter),
@@ -214,7 +218,8 @@ object GitHubHelper {
                 isSingleChapter = true,
                 bookId = bookId,
                 localDirPath = targetDir.absolutePath,
-                sourceUrl = info.originalUrl.ifEmpty { info.rawFileUrl }
+                sourceUrl = info.originalUrl.ifEmpty { info.rawFileUrl },
+                metadata = finalMeta
             )
         } catch (e: Exception) {
             e.printStackTrace()
@@ -373,7 +378,9 @@ object GitHubHelper {
             val fallbackTitle = if (info.path.isNotEmpty()) {
                 info.path.substringAfterLast("/")
             } else info.repo
-            val novelTitle = BookMetadataParser.findTitleInDirectory(destDir) ?: fallbackTitle
+            val dirMeta = BookMetadataParser.findMetadataInDirectory(destDir)
+            val novelTitle = dirMeta?.title?.takeIf { it.isNotBlank() } ?: fallbackTitle
+            val finalMeta = (dirMeta ?: BookMetadata()).copy(title = novelTitle)
 
             GitHubLoadResult.Success(
                 chapters = chapters,
@@ -381,7 +388,8 @@ object GitHubHelper {
                 isSingleChapter = false,
                 bookId = bookId,
                 localDirPath = destDir.absolutePath,
-                sourceUrl = info.originalUrl.ifEmpty { info.archiveZipUrl }
+                sourceUrl = info.originalUrl.ifEmpty { info.archiveZipUrl },
+                metadata = finalMeta
             )
         } catch (e: Exception) {
             e.printStackTrace()

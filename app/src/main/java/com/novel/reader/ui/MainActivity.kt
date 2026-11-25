@@ -112,7 +112,7 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
                         chapterCount = externalChapters.size,
                         addedAt = now,
                         lastOpenedAt = now
-                    )
+                    ).withMetadata(repository.currentNovelMetadata, repository.currentNovelTitle)
                     bookLibraryManager.addOrUpdateBook(entry)
                     bookLibraryManager.markOpened(entry.id)
 
@@ -161,7 +161,7 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
                         chapterCount = chapters.size,
                         addedAt = now,
                         lastOpenedAt = now
-                    )
+                    ).withMetadata(repository.currentNovelMetadata, repository.currentNovelTitle)
                     bookLibraryManager.addOrUpdateBook(entry)
                     bookLibraryManager.markOpened(entry.id)
 
@@ -493,7 +493,7 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
             chapterCount = result.chapters.size,
             addedAt = now,
             lastOpenedAt = now
-        )
+        ).withMetadata(result.metadata, result.title)
         bookLibraryManager.addOrUpdateBook(entry)
         bookLibraryManager.markOpened(entry.id)
 
@@ -525,7 +525,7 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
             chapterCount = result.chapters.size,
             addedAt = now,
             lastOpenedAt = now
-        )
+        ).withMetadata(result.metadata, result.title)
         bookLibraryManager.addOrUpdateBook(entry)
         bookLibraryManager.markOpened(entry.id)
 
@@ -603,44 +603,16 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
 
     private fun loadInitialBookFromLibrary() {
         lifecycleScope.launch {
-            // 首次啟動：將預設內建小說加入書單（書名動態取自 book.yaml 或檔名）
-            if (!bookLibraryManager.hasInitializedBuiltins() && bookLibraryManager.getBooks().isEmpty()) {
-                val assetPath = "novels/yuan.zip"
-                val chapters = repository.loadBuiltinNovelChapters(assetPath)
-                bookLibraryManager.setInitializedBuiltins(true)
-                if (chapters.isNotEmpty()) {
-                    val now = System.currentTimeMillis()
-                    val entry = BookEntry(
-                        id = repository.currentNovelId,
-                        title = repository.currentNovelTitle,
-                        sourceType = BookSourceType.BUILTIN_ASSET,
-                        localPath = repository.currentNovelLocalPath,
-                        sourceUriOrUrl = assetPath,
-                        chapterCount = chapters.size,
-                        addedAt = now,
-                        lastOpenedAt = now
-                    )
+            // 首次啟動（或升級至含完整內建書單與 book.yaml 的版本）：掃描 assets/novels/*.zip 全部納入書單
+            if (!bookLibraryManager.hasInitializedBuiltins()) {
+                val builtinEntries = repository.discoverBuiltinAssets()
+                builtinEntries.forEach { entry ->
                     bookLibraryManager.addOrUpdateBook(entry)
-                    bookLibraryManager.markOpened(entry.id)
-
-                    val saved = progressManager.getSavedProgressForBook(entry.id)
-                    val targetChapterIndex = saved?.chapterIndex?.coerceIn(chapters.indices) ?: 0
-                    val targetSegmentIndex = saved?.segmentIndex ?: 0
-
-                    binding.toolbar.title = entry.title
-                    ttsService?.setChapterList(
-                        list = chapters,
-                        initialIndex = targetChapterIndex,
-                        initialSegmentIndex = targetSegmentIndex,
-                        startPlay = false,
-                        novelId = entry.id,
-                        novelTitle = entry.title
-                    )
-                    return@launch
                 }
+                bookLibraryManager.setInitializedBuiltins(true)
             }
 
-            // 載入書單中最後閱讀的書籍
+            // 載入書單中最後閱讀的書籍（若無則選第一本）
             val lastId = bookLibraryManager.getLastActiveBookId()
             val targetBook = lastId?.let { bookLibraryManager.getBookById(it) }
                 ?: bookLibraryManager.getBooks().firstOrNull()
@@ -710,7 +682,7 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
                 chapterCount = chapters.size,
                 localPath = repository.currentNovelLocalPath ?: entry.localPath,
                 lastOpenedAt = System.currentTimeMillis()
-            )
+            ).withMetadata(repository.currentNovelMetadata, resolvedTitle)
             bookLibraryManager.addOrUpdateBook(updatedEntry)
             bookLibraryManager.markOpened(updatedEntry.id)
 

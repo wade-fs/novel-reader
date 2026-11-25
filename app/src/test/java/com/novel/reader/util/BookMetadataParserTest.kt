@@ -95,4 +95,49 @@ class BookMetadataParserTest {
             }
         }
     }
+
+    @Test
+    fun testParseFullBookMetadataAndBundledAssetZips() {
+        val yuanYaml = """
+            project:
+              id: yuan
+              name: 元末明初歷史群像小說
+              subtitle: 志在山河・山河易旌
+              series: 千載風雲
+              era: 元末明初 (1328–1368 年)
+              tags:
+                - 元末
+                - 群雄逐鹿
+                - 歷史群像
+        """.trimIndent()
+
+        val meta = BookMetadataParser.parseMetadata(yuanYaml)
+        assertEquals("元末明初歷史群像小說", meta.title)
+        assertEquals("志在山河・山河易旌", meta.subtitle)
+        assertEquals("千載風雲", meta.series)
+        assertEquals("元末明初 (1328–1368 年)", meta.era)
+        assertEquals(listOf("元末", "群雄逐鹿", "歷史群像"), meta.tags)
+
+        // 驗證 assets/novels/*.zip 全部都有打包 book.yaml 且可快速解析書籍資訊與章節數
+        val assetsDir = File("src/main/assets/novels")
+        if (assetsDir.exists()) {
+            val expectedZips = mapOf(
+                "yuan.zip" to Pair("元末明初歷史群像小說", 540),
+                "song.zip" to Pair("宋末", 720),
+                "sex.zip" to Pair("萬界風月樓", 88),
+                "ming.zip" to Pair("明末清初歷史小說", 1)
+            )
+            for ((zipName, expectedPair) in expectedZips) {
+                val zipFile = File(assetsDir, zipName)
+                assertTrue("Missing asset zip: $zipName", zipFile.exists())
+                val summary = zipFile.inputStream().use {
+                    ArchiveHelper.inspectZipBookSummary(it, fallbackTitle = zipName.removeSuffix(".zip"))
+                }
+                assertEquals("Title mismatch for $zipName", expectedPair.first, summary.metadata.title)
+                assertEquals("Chapter count mismatch for $zipName", expectedPair.second, summary.chapterCount)
+                assertTrue("Subtitle should be present for $zipName", summary.metadata.subtitle.isNotBlank())
+                assertTrue("Tags should be present for $zipName", summary.metadata.tags.isNotEmpty())
+            }
+        }
+    }
 }

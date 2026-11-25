@@ -1,10 +1,65 @@
 package com.novel.reader.util
 
+import com.novel.reader.model.BookMetadata
 import java.io.*
 import java.util.zip.GZIPInputStream
 import java.util.zip.ZipInputStream
 
+data class ZipBookSummary(
+    val metadata: BookMetadata,
+    val chapterCount: Int
+)
+
 object ArchiveHelper {
+
+    /**
+     * 快速檢視 ZIP 壓縮檔內的 book.yaml 書籍資訊與章節數量（不需解壓全部檔案至磁碟）
+     */
+    fun inspectZipBookSummary(inputStream: InputStream, fallbackTitle: String): ZipBookSummary {
+        var metadata = BookMetadata(title = fallbackTitle)
+        var chapterCount = 0
+
+        try {
+            ZipInputStream(BufferedInputStream(inputStream)).use { zis ->
+                var entry = zis.nextEntry
+                while (entry != null) {
+                    val name = entry.name
+                    if (!entry.isDirectory) {
+                        if (BookMetadataParser.isBookYamlFileName(name)) {
+                            val yamlBytes = zis.readBytes()
+                            val parsed = BookMetadataParser.parseMetadata(String(yamlBytes, Charsets.UTF_8))
+                            metadata = parsed.copy(title = parsed.title.ifBlank { fallbackTitle })
+                        } else if (isChapterFileName(name)) {
+                            chapterCount++
+                        }
+                    }
+                    zis.closeEntry()
+                    entry = zis.nextEntry
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        return ZipBookSummary(metadata = metadata, chapterCount = chapterCount)
+    }
+
+    private fun isChapterFileName(entryPath: String): Boolean {
+        val fileName = entryPath.substringAfterLast("/").substringAfterLast("\\")
+        val lower = fileName.lowercase()
+        if (!lower.endsWith(".md") && !lower.endsWith(".txt")) return false
+        if (lower.contains("rules") || lower.contains("outline") || lower.contains("readme") ||
+            lower.contains("character") || lower.contains("timeline") || lower.contains("geography") ||
+            lower.contains("audit") || lower.contains("ledger") || lower.contains("bible") ||
+            lower.contains("social") || lower.contains("workflow") || lower.contains("progress") ||
+            lower.contains("generator") || lower.contains("book.yaml") ||
+            fileName.matches(Regex("""^volume\d+\.md$""", RegexOption.IGNORE_CASE))
+        ) {
+            return false
+        }
+        val num = Regex("""\d+""").find(fileName)?.value?.toIntOrNull() ?: 0
+        return num > 0
+    }
 
     private fun shouldExtractEntry(entryName: String): Boolean {
         val lower = entryName.lowercase()

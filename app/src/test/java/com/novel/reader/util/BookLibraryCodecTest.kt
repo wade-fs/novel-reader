@@ -18,7 +18,13 @@ class BookLibraryCodecTest {
                 sourceUriOrUrl = "https://github.com/wade-fs/novel/tree/main/sex",
                 chapterCount = 88,
                 addedAt = 1000L,
-                lastOpenedAt = 2000L
+                lastOpenedAt = 2000L,
+                subtitle = "諸天萬界爽文與風月傳奇",
+                author = "測試作者",
+                series = "仙俠",
+                era = "諸天萬界",
+                description = "長篇簡介文字",
+                tags = listOf("諸天萬界", "萬界樓")
             ),
             BookEntry(
                 id = "archive_demo_zip",

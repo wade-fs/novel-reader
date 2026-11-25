@@ -1,5 +1,6 @@
 package com.novel.reader.util
 
+import com.novel.reader.model.BookMetadata
 import com.novel.reader.model.Chapter
 import com.novel.reader.model.ChapterContent
 import java.io.File
@@ -8,11 +9,12 @@ data class StoredWebBook(
     val title: String,
     val sourceUrl: String,
     val preferWebView: Boolean,
-    val chapters: List<Chapter>
+    val chapters: List<Chapter>,
+    val metadata: BookMetadata = BookMetadata(title = title)
 )
 
 /**
- * 網路小說的本機目錄與章節快取儲存工具（純 Kotlin 檔案讀寫，便於單元測試與刪除書單時一併清理）
+ * 網路小說的本機目錄與章節快取儲存工具（含完整書籍資訊與逐章快取）
  */
 object WebBookStore {
 
@@ -38,7 +40,8 @@ object WebBookStore {
         title: String,
         sourceUrl: String,
         preferWebView: Boolean,
-        chapters: List<Chapter>
+        chapters: List<Chapter>,
+        metadata: BookMetadata = BookMetadata(title = title)
     ) {
         bookDir.mkdirs()
         File(bookDir, CACHE_DIR_NAME).mkdirs()
@@ -47,6 +50,12 @@ object WebBookStore {
             appendLine("title=${sanitizeLine(title)}")
             appendLine("sourceUrl=${sanitizeLine(sourceUrl)}")
             appendLine("preferWebView=$preferWebView")
+            appendLine("subtitle=${sanitizeLine(metadata.subtitle)}")
+            appendLine("author=${sanitizeLine(metadata.author)}")
+            appendLine("series=${sanitizeLine(metadata.series)}")
+            appendLine("era=${sanitizeLine(metadata.era)}")
+            appendLine("description=${sanitizeLine(metadata.description)}")
+            appendLine("tags=${metadata.tags.joinToString(",") { sanitizeLine(it).replace(",", " ") }}")
         }
         File(bookDir, META_FILE).writeText(metaContent, Charsets.UTF_8)
 
@@ -70,12 +79,29 @@ object WebBookStore {
         var title = ""
         var sourceUrl = ""
         var preferWebView = false
+        var subtitle = ""
+        var author = ""
+        var series = ""
+        var era = ""
+        var description = ""
+        var tags: List<String> = emptyList()
 
         metaFile.readLines(Charsets.UTF_8).forEach { line ->
             when {
                 line.startsWith("title=") -> title = line.removePrefix("title=").trim()
                 line.startsWith("sourceUrl=") -> sourceUrl = line.removePrefix("sourceUrl=").trim()
                 line.startsWith("preferWebView=") -> preferWebView = line.removePrefix("preferWebView=").trim().toBoolean()
+                line.startsWith("subtitle=") -> subtitle = line.removePrefix("subtitle=").trim()
+                line.startsWith("author=") -> author = line.removePrefix("author=").trim()
+                line.startsWith("series=") -> series = line.removePrefix("series=").trim()
+                line.startsWith("era=") -> era = line.removePrefix("era=").trim()
+                line.startsWith("description=") -> description = line.removePrefix("description=").trim()
+                line.startsWith("tags=") -> {
+                    val raw = line.removePrefix("tags=").trim()
+                    if (raw.isNotEmpty()) {
+                        tags = raw.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                    }
+                }
             }
         }
 
@@ -104,11 +130,21 @@ object WebBookStore {
         }
 
         if (chapters.isEmpty()) return null
+        val resolvedTitle = title.ifBlank { "網路小說" }
         return StoredWebBook(
-            title = title.ifBlank { "網路小說" },
+            title = resolvedTitle,
             sourceUrl = sourceUrl,
             preferWebView = preferWebView,
-            chapters = chapters
+            chapters = chapters,
+            metadata = BookMetadata(
+                title = resolvedTitle,
+                subtitle = subtitle,
+                author = author,
+                series = series,
+                era = era,
+                description = description,
+                tags = tags
+            )
         )
     }
 

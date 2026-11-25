@@ -1,5 +1,6 @@
 package com.novel.reader.util
 
+import com.novel.reader.model.BookMetadata
 import com.novel.reader.model.Chapter
 import com.novel.reader.model.ChapterContent
 import org.jsoup.Jsoup
@@ -21,7 +22,8 @@ data class ParsedWebChapterRef(
 data class ParsedWebBook(
     val title: String,
     val chapters: List<ParsedWebChapterRef>,
-    val sourceUrl: String
+    val sourceUrl: String,
+    val metadata: BookMetadata = BookMetadata(title = title)
 )
 
 /**
@@ -137,6 +139,7 @@ object WebNovelParser {
         val host = WebAdBlocker.extractHost(baseUrl) ?: ""
 
         val title = extractBookTitle(doc, baseUrl, host)
+        val metadata = extractBookMetadata(doc, title, host)
         val chapters = when {
             host.contains("piaotia") -> parsePiaotiaToc(doc)
             host.contains("czbooks") -> parseCzbooksToc(doc)
@@ -149,7 +152,65 @@ object WebNovelParser {
         return ParsedWebBook(
             title = title,
             chapters = chapters,
-            sourceUrl = baseUrl
+            sourceUrl = baseUrl,
+            metadata = metadata
+        )
+    }
+
+    private fun extractBookMetadata(doc: Document, title: String, host: String): BookMetadata {
+        val rawAuthor = listOfNotNull(
+            doc.selectFirst("meta[property=og:novel:author]")?.attr("content"),
+            doc.selectFirst("meta[name=author]")?.attr("content"),
+            doc.selectFirst("span.author a, .author a, .author, .bookinfo .author, .booktag .red")?.text()
+        ).firstOrNull { it.isNotBlank() } ?: ""
+
+        val author = rawAuthor
+            .replace(Regex("""^(?:作者|著)[：:\s]*"""), "")
+            .trim()
+            .take(40)
+
+        val category = listOfNotNull(
+            doc.selectFirst("meta[property=og:novel:category]")?.attr("content"),
+            doc.selectFirst(".category a, .category, .nav-category a")?.text()
+        ).firstOrNull { it.isNotBlank() }?.trim()?.take(30) ?: ""
+
+        val status = listOfNotNull(
+            doc.selectFirst("meta[property=og:novel:status]")?.attr("content"),
+            doc.selectFirst(".state, .status")?.text()
+        ).firstOrNull { it.isNotBlank() }?.trim()?.take(30) ?: ""
+
+        val description = listOfNotNull(
+            doc.selectFirst(".description, #intro, .intro, .bookintro, .book-intro")?.text(),
+            doc.selectFirst("meta[property=og:description]")?.attr("content"),
+            doc.selectFirst("meta[name=description]")?.attr("content")
+        ).map { it.replace('\u00A0', ' ').trim() }
+            .firstOrNull { it.isNotBlank() }
+            ?.take(300) ?: ""
+
+        val tags = linkedSetOf<String>()
+        doc.select(".hashtag a, .tags a, .tag a, .booktag span").forEach { el ->
+            val t = el.text().removePrefix("#").trim()
+            if (t.length in 1..20 && t != title && t != author) {
+                tags.add(t)
+            }
+        }
+        if (tags.isEmpty() && host.isNotBlank()) {
+            val siteLabel = when {
+                host.contains("piaotia") -> "飄天文學"
+                host.contains("czbooks") -> "小說狂人"
+                host.contains("uukanshu") -> "UU看書"
+                else -> host
+            }
+            tags.add(siteLabel)
+        }
+
+        return BookMetadata(
+            title = title,
+            author = author,
+            series = category,
+            era = status,
+            description = description,
+            tags = tags.take(8)
         )
     }
 

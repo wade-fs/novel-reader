@@ -41,7 +41,11 @@ class WebNovelParserTest {
     @Test
     fun testParsePiaotiaTocAndChapter() {
         val tocHtml = """
-            <html><head><title>奥术神座最新章节,奥术神座无弹窗全文阅读_飘天文学</title></head>
+            <html><head>
+              <title>奥术神座最新章节,奥术神座无弹窗全文阅读_飘天文学</title>
+              <meta name="author" content="爱潜水的乌贼" />
+              <meta name="description" content="知识就是力量。" />
+            </head>
             <body>
               <h1>奥术神座最新章节</h1>
               <div class="centent">
@@ -56,6 +60,8 @@ class WebNovelParserTest {
 
         val book = WebNovelParser.parseToc(tocHtml, "https://www.piaotia.com/html/3/3759/")
         assertEquals("奥术神座", book.title)
+        assertEquals("爱潜水的乌贼", book.metadata.author)
+        assertEquals("知识就是力量。", book.metadata.description)
         assertEquals(2, book.chapters.size)
         assertEquals("第一章 燃烧的火刑架", book.chapters[0].title)
         assertEquals("https://www.piaotia.com/html/3/3759/1881421.html", book.chapters[0].url)

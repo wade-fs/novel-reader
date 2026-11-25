@@ -9,6 +9,7 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import com.novel.reader.model.BookMetadata
 import com.novel.reader.model.Chapter
 import com.novel.reader.model.ChapterContent
 import kotlinx.coroutines.Dispatchers
@@ -36,7 +37,8 @@ sealed class WebBookImportResult {
         val sourceUrl: String,
         val localDirPath: String,
         val chapters: List<Chapter>,
-        val preferWebView: Boolean
+        val preferWebView: Boolean,
+        val metadata: BookMetadata = BookMetadata(title = title)
     ) : WebBookImportResult()
 
     data class NeedsInteractiveWebView(val url: String, val reason: String) : WebBookImportResult()
@@ -154,7 +156,8 @@ object WebNovelFetcher {
                 title = parsedToc.title,
                 sourceUrl = pageUrl,
                 preferWebView = preferWebView,
-                chapters = chapters
+                chapters = chapters,
+                metadata = parsedToc.metadata
             )
             return WebBookImportResult.Success(
                 bookId = bookId,
@@ -162,7 +165,8 @@ object WebNovelFetcher {
                 sourceUrl = pageUrl,
                 localDirPath = bookDir.absolutePath,
                 chapters = chapters,
-                preferWebView = preferWebView
+                preferWebView = preferWebView,
+                metadata = parsedToc.metadata
             )
         }
 
@@ -181,12 +185,14 @@ object WebNovelFetcher {
                 remoteUrl = pageUrl
             )
             val bookTitle = parsedToc.title.ifBlank { parsedChapter.title }
+            val singleMeta = parsedToc.metadata.copy(title = bookTitle)
             WebBookStore.saveBook(
                 bookDir = bookDir,
                 title = bookTitle,
                 sourceUrl = pageUrl,
                 preferWebView = preferWebView,
-                chapters = listOf(singleChapter)
+                chapters = listOf(singleChapter),
+                metadata = singleMeta
             )
             return WebBookImportResult.Success(
                 bookId = bookId,
@@ -194,7 +200,8 @@ object WebNovelFetcher {
                 sourceUrl = pageUrl,
                 localDirPath = bookDir.absolutePath,
                 chapters = listOf(singleChapter),
-                preferWebView = preferWebView
+                preferWebView = preferWebView,
+                metadata = singleMeta
             )
         }
 

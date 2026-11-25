@@ -2,32 +2,41 @@ package com.novel.reader.util
 
 import android.content.Context
 import androidx.documentfile.provider.DocumentFile
+import com.novel.reader.model.BookMetadata
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
 
 /**
- * 解析小說的 book.yaml / book.yml 取得書名，並提供檔案名備援處理。
+ * 解析小說的 book.yaml / book.yml 取得完整書籍資訊（書名、副標題、作者、系列、時代、簡介、標籤），
+ * 並提供檔案名備援處理。
  */
 object BookMetadataParser {
 
     private val PREFERRED_SECTIONS = setOf("project", "book", "metadata", "novel")
 
     /**
-     * 從 book.yaml 內容中解析書名。
-     * 優先順序：
-     * 1. project/book/metadata/novel 區塊底下的 title 或 name
-     * 2. 頂層的 title 或 name
-     * 注意：不會誤抓 scale.volumes 底下的分卷 name。
+     * 解析 book.yaml 完整書籍資訊。
+     * 不會誤抓 scale.volumes 底下的分卷 name。
      */
-    fun parseTitle(yamlContent: String): String? {
-        if (yamlContent.isBlank()) return null
+    fun parseMetadata(yamlContent: String): BookMetadata {
+        if (yamlContent.isBlank()) return BookMetadata()
 
         var currentTopSection: String? = null
+        var inTagsList = false
+        var tagsKeyIndent = -1
+
         var sectionTitle: String? = null
         var sectionName: String? = null
         var topLevelTitle: String? = null
         var topLevelName: String? = null
+
+        var subtitle = ""
+        var author = ""
+        var series = ""
+        var era = ""
+        var description = ""
+        val tags = mutableListOf<String>()
 
         for (rawLine in yamlContent.lines()) {
             val trimmed = rawLine.trim()
@@ -35,60 +44,130 @@ object BookMetadataParser {
 
             val indent = rawLine.indexOfFirst { !it.isWhitespace() }.coerceAtLeast(0)
 
+            // 處理 tags YAML list 項目（例如：  tags:\n    - 元末）
+            if (inTagsList) {
+                if (indent > tagsKeyIndent && trimmed.startsWith("-")) {
+                    val tagVal = cleanYamlScalar(trimmed.removePrefix("-"))
+                    if (tagVal.isNotEmpty()) tags.add(tagVal)
+                    continue
+                } else if (indent <= tagsKeyIndent || !trimmed.startsWith("-")) {
+                    inTagsList = false
+                }
+            }
+
             if (indent == 0) {
-                // 頂層 key
                 val colonIdx = trimmed.indexOf(':')
                 if (colonIdx <= 0) {
                     currentTopSection = null
                     continue
                 }
                 val key = trimmed.substring(0, colonIdx).trim().lowercase()
-                val valuePart = cleanYamlScalar(trimmed.substring(colonIdx + 1))
+                val rawVal = trimmed.substring(colonIdx + 1)
+                val valuePart = cleanYamlScalar(rawVal)
 
                 if (valuePart.isEmpty()) {
-                    currentTopSection = key
+                    if (key == "tags") {
+                        inTagsList = true
+                        tagsKeyIndent = indent
+                    } else {
+                        currentTopSection = key
+                    }
                 } else {
                     currentTopSection = null
                     when (key) {
                         "title" -> if (topLevelTitle == null) topLevelTitle = valuePart
                         "name" -> if (topLevelName == null) topLevelName = valuePart
+                        "subtitle" -> if (subtitle.isEmpty()) subtitle = valuePart
+                        "author" -> if (author.isEmpty()) author = valuePart
+                        "series" -> if (series.isEmpty()) series = valuePart
+                        "era", "status" -> if (era.isEmpty()) era = valuePart
+                        "description", "summary", "intro" -> if (description.isEmpty()) description = valuePart
+                        "tags" -> parseInlineTags(valuePart, tags)
                     }
                 }
             } else if (currentTopSection in PREFERRED_SECTIONS) {
-                // 只讀取第二層直屬欄位（排除 list item 或更深層巢狀）
                 if (trimmed.startsWith("-")) continue
                 val colonIdx = trimmed.indexOf(':')
                 if (colonIdx <= 0) continue
                 val key = trimmed.substring(0, colonIdx).trim().lowercase()
-                val valuePart = cleanYamlScalar(trimmed.substring(colonIdx + 1))
+                val rawVal = trimmed.substring(colonIdx + 1)
+                val valuePart = cleanYamlScalar(rawVal)
+
+                if (key == "tags") {
+                    if (valuePart.isEmpty()) {
+                        inTagsList = true
+                        tagsKeyIndent = indent
+                    } else {
+                        parseInlineTags(valuePart, tags)
+                    }
+                    continue
+                }
+
                 if (valuePart.isNotEmpty()) {
                     when (key) {
                         "title" -> if (sectionTitle == null) sectionTitle = valuePart
                         "name" -> if (sectionName == null) sectionName = valuePart
+                        "subtitle" -> if (subtitle.isEmpty()) subtitle = valuePart
+                        "author" -> if (author.isEmpty()) author = valuePart
+                        "series" -> if (series.isEmpty()) series = valuePart
+                        "era" -> era = valuePart
+                        "status" -> if (era.isEmpty()) era = valuePart
+                        "description", "summary", "intro" -> if (description.isEmpty()) description = valuePart
                     }
                 }
             }
         }
 
-        return sectionTitle ?: sectionName ?: topLevelTitle ?: topLevelName
+        val resolvedTitle = sectionTitle ?: sectionName ?: topLevelTitle ?: topLevelName ?: ""
+        return BookMetadata(
+            title = resolvedTitle,
+            subtitle = subtitle,
+            author = author,
+            series = series,
+            era = era,
+            description = description,
+            tags = tags.distinct()
+        )
+    }
+
+    private fun parseInlineTags(value: String, target: MutableList<String>) {
+        val inner = value.removePrefix("[").removeSuffix("]")
+        inner.split(',', '、').forEach { part ->
+            val cleaned = cleanYamlScalar(part)
+            if (cleaned.isNotEmpty()) target.add(cleaned)
+        }
+    }
+
+    /**
+     * 從 book.yaml 內容中解析書名。
+     */
+    fun parseTitle(yamlContent: String): String? {
+        return parseMetadata(yamlContent).title.takeIf { it.isNotBlank() }
+    }
+
+    /**
+     * 在本機目錄中尋找並解析 book.yaml / book.yml 的完整書籍資訊
+     */
+    fun findMetadataInDirectory(dir: File): BookMetadata? {
+        val yamlFile = findBookYamlFile(dir, maxDepth = 2) ?: return null
+        return try {
+            val meta = parseMetadata(yamlFile.readText(Charsets.UTF_8))
+            if (meta.title.isNotBlank() || meta.subtitle.isNotBlank() || meta.tags.isNotEmpty()) meta else null
+        } catch (_: Exception) {
+            null
+        }
     }
 
     /**
      * 在本機目錄中尋找 book.yaml / book.yml（最深搜尋 2 層，以相容 zip 外層多包一層資料夾的情況）
      */
     fun findTitleInDirectory(dir: File): String? {
-        val yamlFile = findBookYamlFile(dir, maxDepth = 2) ?: return null
-        return try {
-            parseTitle(yamlFile.readText(Charsets.UTF_8))
-        } catch (_: Exception) {
-            null
-        }
+        return findMetadataInDirectory(dir)?.title?.takeIf { it.isNotBlank() }
     }
 
     fun findBookYamlFile(dir: File, maxDepth: Int = 2): File? {
         if (!dir.exists() || !dir.isDirectory) return null
 
-        // 使用 BFS 確保優先找到最淺層的 book.yaml
         val queue = ArrayDeque<Pair<File, Int>>()
         queue.add(dir to 0)
 
@@ -112,18 +191,22 @@ object BookMetadataParser {
     }
 
     /**
-     * 在 SAF DocumentFile 目錄中尋找 book.yaml / book.yml
+     * 在 SAF DocumentFile 目錄中尋找並解析 book.yaml / book.yml
      */
-    fun findTitleInDocumentDir(rootDoc: DocumentFile, context: Context): String? {
+    fun findMetadataInDocumentDir(rootDoc: DocumentFile, context: Context): BookMetadata? {
         val yamlDoc = findYamlInDoc(rootDoc, depth = 0, maxDepth = 1) ?: return null
         return try {
             context.contentResolver.openInputStream(yamlDoc.uri)?.use { stream ->
                 val content = BufferedReader(InputStreamReader(stream, Charsets.UTF_8)).readText()
-                parseTitle(content)
+                parseMetadata(content)
             }
         } catch (_: Exception) {
             null
         }
+    }
+
+    fun findTitleInDocumentDir(rootDoc: DocumentFile, context: Context): String? {
+        return findMetadataInDocumentDir(rootDoc, context)?.title?.takeIf { it.isNotBlank() }
     }
 
     private fun findYamlInDoc(dir: DocumentFile, depth: Int, maxDepth: Int): DocumentFile? {
@@ -171,17 +254,14 @@ object BookMetadataParser {
         val trimmed = raw.trim()
         if (trimmed.isEmpty()) return ""
 
-        // 處理雙引號字串
         if (trimmed.startsWith("\"")) {
             val endQuote = trimmed.indexOf('"', startIndex = 1)
             return if (endQuote > 0) trimmed.substring(1, endQuote).trim() else trimmed.trim('"').trim()
         }
-        // 處理單引號字串
         if (trimmed.startsWith("'")) {
             val endQuote = trimmed.indexOf('\'', startIndex = 1)
             return if (endQuote > 0) trimmed.substring(1, endQuote).trim() else trimmed.trim('\'').trim()
         }
-        // 未加引號時，移除行內註解 (# 前需有空白)
         val commentIdx = trimmed.indexOf(" #")
         val withoutComment = if (commentIdx != -1) trimmed.substring(0, commentIdx) else trimmed
         return withoutComment.trim()

@@ -7,18 +7,20 @@ import com.novel.reader.model.BookSourceType
 import java.io.File
 
 /**
- * 純 Kotlin 字串序列/反序列化工具（不依賴 Android org.json 實作，可在 JVM Unit Test 直接驗證）
+ * 純 Kotlin 字串序列/反序列化工具（相容舊版 8 欄位與新版 14 欄位含書籍完整資訊）
  */
 object BookEntryCodec {
 
     private const val FIELD_SEP = "\u001F"
     private const val RECORD_SEP = "\u001E"
+    private const val TAG_SEP = "\u001D"
 
     private fun escape(value: String): String {
         return value
             .replace("\\", "\\\\")
             .replace(FIELD_SEP, "\\u001F")
             .replace(RECORD_SEP, "\\u001E")
+            .replace(TAG_SEP, "\\u001D")
             .replace("\n", "\\n")
             .replace("\r", "\\r")
     }
@@ -36,6 +38,10 @@ object BookEntryCodec {
                     }
                     value.startsWith("\\u001E", i) -> {
                         sb.append(RECORD_SEP)
+                        i += 6
+                    }
+                    value.startsWith("\\u001D", i) -> {
+                        sb.append(TAG_SEP)
                         i += 6
                     }
                     value[i + 1] == 'n' -> {
@@ -73,7 +79,13 @@ object BookEntryCodec {
                 escape(e.sourceUriOrUrl ?: ""),
                 e.chapterCount.toString(),
                 e.addedAt.toString(),
-                e.lastOpenedAt.toString()
+                e.lastOpenedAt.toString(),
+                escape(e.subtitle),
+                escape(e.author),
+                escape(e.series),
+                escape(e.era),
+                escape(e.description),
+                e.tags.joinToString(TAG_SEP) { escape(it) }
             ).joinToString(FIELD_SEP)
         }
     }
@@ -98,6 +110,16 @@ object BookEntryCodec {
             val chapterCount = parts[5].toIntOrNull() ?: 0
             val addedAt = parts[6].toLongOrNull() ?: 0L
             val lastOpenedAt = parts[7].toLongOrNull() ?: addedAt
+
+            val subtitle = if (parts.size > 8) unescape(parts[8]) else ""
+            val author = if (parts.size > 9) unescape(parts[9]) else ""
+            val series = if (parts.size > 10) unescape(parts[10]) else ""
+            val era = if (parts.size > 11) unescape(parts[11]) else ""
+            val description = if (parts.size > 12) unescape(parts[12]) else ""
+            val tags = if (parts.size > 13 && parts[13].isNotBlank()) {
+                parts[13].split(TAG_SEP).map { unescape(it) }.filter { it.isNotBlank() }
+            } else emptyList()
+
             result.add(
                 BookEntry(
                     id = id,
@@ -107,7 +129,13 @@ object BookEntryCodec {
                     sourceUriOrUrl = sourceUriOrUrl,
                     chapterCount = chapterCount,
                     addedAt = addedAt,
-                    lastOpenedAt = lastOpenedAt
+                    lastOpenedAt = lastOpenedAt,
+                    subtitle = subtitle,
+                    author = author,
+                    series = series,
+                    era = era,
+                    description = description,
+                    tags = tags
                 )
             )
         }
@@ -116,7 +144,7 @@ object BookEntryCodec {
 }
 
 /**
- * 書單管理與持久化（儲存所有增加或下載過的小說，支援開啟與刪除）
+ * 書單管理與持久化（儲存所有內建、增加或下載過的小說與其書籍資訊，支援開啟與刪除）
  */
 class BookLibraryManager(private val context: Context) {
 
@@ -126,7 +154,8 @@ class BookLibraryManager(private val context: Context) {
     companion object {
         private const val KEY_BOOKS = "saved_books_v1"
         private const val KEY_LAST_ACTIVE_BOOK_ID = "last_active_book_id"
-        private const val KEY_INITIALIZED_BUILTINS = "initialized_builtins_v1"
+        // v2: 掃描並初始化 assets/novels/*.zip 全部內建書籍與 book.yaml 書籍資訊
+        private const val KEY_INITIALIZED_BUILTINS = "initialized_builtins_v2"
     }
 
     fun getBooks(): List<BookEntry> {
@@ -143,7 +172,15 @@ class BookLibraryManager(private val context: Context) {
         val existingIdx = current.indexOfFirst { it.id == entry.id }
         val updated = if (existingIdx != -1) {
             val old = current[existingIdx]
-            entry.copy(addedAt = old.addedAt)
+            entry.copy(
+                addedAt = old.addedAt,
+                subtitle = entry.subtitle.ifBlank { old.subtitle },
+                author = entry.author.ifBlank { old.author },
+                series = entry.series.ifBlank { old.series },
+                era = entry.era.ifBlank { old.era },
+                description = entry.description.ifBlank { old.description },
+                tags = if (entry.tags.isNotEmpty()) entry.tags else old.tags
+            )
         } else {
             entry
         }
@@ -198,7 +235,6 @@ class BookLibraryManager(private val context: Context) {
         }
         editor.apply()
 
-        // 僅刪除 App 內部 filesDir 下的快取檔案，絕不刪除使用者外部儲存空間目錄
         removed.localPath?.let { path ->
             try {
                 val target = File(path)

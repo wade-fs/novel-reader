@@ -41,6 +41,9 @@ class BookListBottomSheetDialogFragment(
                 dismiss()
                 onSelectBook(book)
             },
+            onShowBookInfo = { book ->
+                showBookInfoDialog(book)
+            },
             onDeleteBook = { book ->
                 confirmDelete(book)
             }
@@ -55,6 +58,41 @@ class BookListBottomSheetDialogFragment(
         }
 
         refreshList()
+    }
+
+    private fun showBookInfoDialog(book: BookEntry) {
+        val infoText = buildString {
+            if (book.subtitle.isNotBlank()) appendLine("副標題：${book.subtitle}")
+            if (book.author.isNotBlank()) appendLine("作者：${book.author}")
+            if (book.series.isNotBlank()) appendLine("系列 / 分類：${book.series}")
+            if (book.era.isNotBlank()) appendLine("時代 / 狀態：${book.era}")
+            appendLine("章節數：共 ${book.chapterCount} 章")
+            appendLine("來源：${book.sourceType.displayLabel}")
+            if (!book.sourceUriOrUrl.isNullOrBlank()) {
+                appendLine("位址：${book.sourceUriOrUrl}")
+            }
+            if (book.tags.isNotEmpty()) {
+                appendLine("標籤：${book.tags.joinToString("、")}")
+            }
+            if (book.description.isNotBlank()) {
+                appendLine()
+                appendLine("簡介：")
+                append(book.description)
+            }
+        }.trim()
+
+        AlertDialog.Builder(requireContext())
+            .setTitle(book.title)
+            .setMessage(infoText)
+            .setPositiveButton("開始閱讀") { _, _ ->
+                dismiss()
+                onSelectBook(book)
+            }
+            .setNeutralButton("刪除") { _, _ ->
+                confirmDelete(book)
+            }
+            .setNegativeButton("關閉", null)
+            .show()
     }
 
     private fun confirmDelete(book: BookEntry) {

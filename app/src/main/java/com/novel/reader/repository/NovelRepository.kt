@@ -3,6 +3,9 @@ package com.novel.reader.repository
 import android.content.Context
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
+import com.novel.reader.model.BookEntry
+import com.novel.reader.model.BookMetadata
+import com.novel.reader.model.BookSourceType
 import com.novel.reader.model.Chapter
 import com.novel.reader.model.ChapterContent
 import com.novel.reader.parser.NovelChapterParser
@@ -26,19 +29,78 @@ class NovelRepository(private val context: Context) {
         private set
     var currentNovelTitle: String = ""
         private set
+    var currentNovelMetadata: BookMetadata = BookMetadata()
+        private set
     var currentNovelLocalPath: String? = null
         private set
 
     /**
+     * 掃描 assets/novels/ 下所有的內建小說壓縮檔（yuan.zip, song.zip, sex.zip, ming.zip 等），
+     * 直接讀取每個 zip 內的 book.yaml 書籍資訊與章節數（不需預先解壓縮），供書單初始化使用。
+     */
+    suspend fun discoverBuiltinAssets(): List<BookEntry> = withContext(Dispatchers.IO) {
+        val assetFiles = try {
+            context.assets.list("novels")
+                ?.filter { it.lowercase().endsWith(".zip") }
+                ?.sortedWith(compareBy<String> { if (it.equals("yuan.zip", true)) 0 else 1 }.thenBy { it })
+                ?: emptyList()
+        } catch (_: Exception) {
+            emptyList()
+        }
+
+        val now = System.currentTimeMillis()
+        val entries = mutableListOf<BookEntry>()
+
+        assetFiles.forEachIndexed { idx, fileName ->
+            val assetPath = "novels/$fileName"
+            val stem = BookMetadataParser.stripFileExtension(fileName)
+            val bookId = "builtin_$stem"
+            val summary = try {
+                context.assets.open(assetPath).use { input ->
+                    ArchiveHelper.inspectZipBookSummary(input, fallbackTitle = stem)
+                }
+            } catch (_: Exception) {
+                null
+            }
+
+            if (summary != null && summary.chapterCount > 0) {
+                val meta = summary.metadata
+                val title = meta.title.ifBlank { stem }
+                val targetDir = File(context.filesDir, "builtin_$stem")
+                entries.add(
+                    BookEntry(
+                        id = bookId,
+                        title = title,
+                        sourceType = BookSourceType.BUILTIN_ASSET,
+                        localPath = targetDir.absolutePath,
+                        sourceUriOrUrl = assetPath,
+                        chapterCount = summary.chapterCount,
+                        addedAt = now - idx * 1000L,
+                        lastOpenedAt = now - idx * 1000L,
+                        subtitle = meta.subtitle,
+                        author = meta.author,
+                        series = meta.series,
+                        era = meta.era,
+                        description = meta.description,
+                        tags = meta.tags
+                    )
+                )
+            }
+        }
+        entries
+    }
+
+    /**
      * 載入內建資產壓縮檔（預設 novels/yuan.zip）。
-     * 優先從解壓後的 book.yaml 讀取書名；缺失時以檔名（去除副檔名）作為書名。
+     * 優先從解壓後的 book.yaml 讀取完整書籍資訊；缺失時以檔名（去除副檔名）作為書名。
      */
     suspend fun loadBuiltinNovelChapters(
         assetPath: String = "novels/yuan.zip",
         bookId: String = "builtin_${BookMetadataParser.stripFileExtension(assetPath)}"
     ): List<Chapter> = withContext(Dispatchers.IO) {
-        val targetDir = File(context.filesDir, "builtin_${BookMetadataParser.stripFileExtension(assetPath)}")
-        val markerFile = File(targetDir, ".extracted_v2_ok")
+        val stem = BookMetadataParser.stripFileExtension(assetPath)
+        val targetDir = File(context.filesDir, "builtin_$stem")
+        val markerFile = File(targetDir, ".extracted_v3_ok")
 
         if (!markerFile.exists()) {
             targetDir.deleteRecursively()
@@ -54,13 +116,14 @@ class NovelRepository(private val context: Context) {
         }
 
         val chapters = scanDirectoryForChapters(targetDir)
-        val resolvedTitle = BookMetadataParser.findTitleInDirectory(targetDir)
-            ?: BookMetadataParser.stripFileExtension(assetPath)
+        val meta = BookMetadataParser.findMetadataInDirectory(targetDir) ?: BookMetadata()
+        val resolvedTitle = meta.title.ifBlank { stem }
 
         cachedChapters.clear()
         cachedChapters.addAll(chapters)
         currentNovelId = bookId
         currentNovelTitle = resolvedTitle
+        currentNovelMetadata = meta.copy(title = resolvedTitle)
         currentNovelLocalPath = targetDir.absolutePath
         chapters
     }
@@ -77,11 +140,13 @@ class NovelRepository(private val context: Context) {
 
         val chapters = scanDirectoryForChapters(dir)
         if (chapters.isNotEmpty()) {
-            val resolvedTitle = BookMetadataParser.findTitleInDirectory(dir) ?: fallbackTitle
+            val meta = BookMetadataParser.findMetadataInDirectory(dir) ?: BookMetadata()
+            val resolvedTitle = meta.title.ifBlank { fallbackTitle }
             cachedChapters.clear()
             cachedChapters.addAll(chapters)
             currentNovelId = bookId
             currentNovelTitle = resolvedTitle
+            currentNovelMetadata = meta.copy(title = resolvedTitle)
             currentNovelLocalPath = dir.absolutePath
         }
         chapters
@@ -89,7 +154,7 @@ class NovelRepository(private val context: Context) {
 
     /**
      * 從外部選取的壓縮檔 (.zip, .tar, .tar.gz, .tgz) 匯入並載入章節。
-     * 優先從 book.yaml 取得書名，缺 book.yaml 時使用壓縮檔名（去除副檔名）。
+     * 優先從 book.yaml 取得書籍資訊，缺 book.yaml 時使用壓縮檔名（去除副檔名）。
      */
     suspend fun loadArchiveChapters(archiveUri: Uri, fileName: String): List<Chapter> = withContext(Dispatchers.IO) {
         val safeName = fileName.replace(Regex("""[^a-zA-Z0-9_\u4e00-\u9fa5]"""), "_")
@@ -108,12 +173,13 @@ class NovelRepository(private val context: Context) {
 
         val chapters = scanDirectoryForChapters(extractDir)
         if (chapters.isNotEmpty()) {
-            val resolvedTitle = BookMetadataParser.findTitleInDirectory(extractDir)
-                ?: BookMetadataParser.stripFileExtension(fileName)
+            val meta = BookMetadataParser.findMetadataInDirectory(extractDir) ?: BookMetadata()
+            val resolvedTitle = meta.title.ifBlank { BookMetadataParser.stripFileExtension(fileName) }
             cachedChapters.clear()
             cachedChapters.addAll(chapters)
             currentNovelId = "archive_$safeName"
             currentNovelTitle = resolvedTitle
+            currentNovelMetadata = meta.copy(title = resolvedTitle)
             currentNovelLocalPath = extractDir.absolutePath
         } else {
             extractDir.deleteRecursively()
@@ -123,7 +189,7 @@ class NovelRepository(private val context: Context) {
 
     /**
      * 從外部選取的資料夾 (SAF Uri) 載入小說章節。
-     * 優先從 book.yaml 取得書名，缺 book.yaml 時使用資料夾名稱。
+     * 優先從 book.yaml 取得書籍資訊，缺 book.yaml 時使用資料夾名稱。
      */
     suspend fun loadCustomDirectoryChapters(treeUri: Uri): List<Chapter> = withContext(Dispatchers.IO) {
         val chapters = mutableListOf<Chapter>()
@@ -170,13 +236,13 @@ class NovelRepository(private val context: Context) {
         scanFolder(scanTarget, 1, "目錄")
         chapters.sortBy { it.chapterNumber }
         if (chapters.isNotEmpty()) {
-            val resolvedTitle = BookMetadataParser.findTitleInDocumentDir(rootDoc, context)
-                ?: rootDoc.name
-                ?: "外部小說目錄"
+            val meta = BookMetadataParser.findMetadataInDocumentDir(rootDoc, context) ?: BookMetadata()
+            val resolvedTitle = meta.title.ifBlank { rootDoc.name ?: "外部小說目錄" }
             cachedChapters.clear()
             cachedChapters.addAll(chapters)
             currentNovelId = "folder_${treeUri.toString().hashCode()}"
             currentNovelTitle = resolvedTitle
+            currentNovelMetadata = meta.copy(title = resolvedTitle)
             currentNovelLocalPath = null
         }
         chapters
@@ -246,6 +312,7 @@ class NovelRepository(private val context: Context) {
         cachedChapters.addAll(stored.chapters)
         currentNovelId = bookId
         currentNovelTitle = stored.title
+        currentNovelMetadata = stored.metadata
         currentNovelLocalPath = bookDir.absolutePath
         stored
     }
@@ -258,7 +325,6 @@ class NovelRepository(private val context: Context) {
         webBookDir: File? = null,
         preferWebView: Boolean = false
     ): ChapterFetchOutcome {
-        // 若為網路小說章節，走快取優先 -> 直連 / WebView Session 抓取
         if (chapter.remoteUrl != null) {
             return WebNovelFetcher.fetchChapterWithCache(
                 context = context,

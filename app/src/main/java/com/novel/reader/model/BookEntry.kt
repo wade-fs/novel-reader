@@ -9,6 +9,16 @@ enum class BookSourceType(val displayLabel: String) {
     WEB_NOVEL("網路小說")
 }
 
+data class BookMetadata(
+    val title: String = "",
+    val subtitle: String = "",
+    val author: String = "",
+    val series: String = "",
+    val era: String = "",
+    val description: String = "",
+    val tags: List<String> = emptyList()
+)
+
 data class BookEntry(
     val id: String,
     val title: String,
@@ -17,5 +27,23 @@ data class BookEntry(
     val sourceUriOrUrl: String? = null,
     val chapterCount: Int = 0,
     val addedAt: Long = System.currentTimeMillis(),
-    val lastOpenedAt: Long = System.currentTimeMillis()
-)
+    val lastOpenedAt: Long = System.currentTimeMillis(),
+    val subtitle: String = "",
+    val author: String = "",
+    val series: String = "",
+    val era: String = "",
+    val description: String = "",
+    val tags: List<String> = emptyList()
+) {
+    fun withMetadata(meta: BookMetadata, fallbackTitle: String = title): BookEntry {
+        return copy(
+            title = meta.title.ifBlank { fallbackTitle },
+            subtitle = meta.subtitle.ifBlank { subtitle },
+            author = meta.author.ifBlank { author },
+            series = meta.series.ifBlank { series },
+            era = meta.era.ifBlank { era },
+            description = meta.description.ifBlank { description },
+            tags = if (meta.tags.isNotEmpty()) meta.tags else tags
+        )
+    }
+}
