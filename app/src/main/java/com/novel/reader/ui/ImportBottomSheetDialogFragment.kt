@@ -49,16 +49,16 @@ class ImportBottomSheetDialogFragment(
 
         // 範例捷徑
         binding.chipExampleYuanTree.setOnClickListener {
-            binding.etGithubUrl.setText("https://github.com/wade-fs/novel2movie/tree/main/yuan")
+            binding.etGithubUrl.setText("https://github.com/wade-fs/novel/tree/main/yuan")
         }
         binding.chipExampleYuanChap1.setOnClickListener {
-            binding.etGithubUrl.setText("https://github.com/wade-fs/novel2movie/blob/main/yuan/chapters/volume1/chap001.md")
+            binding.etGithubUrl.setText("https://github.com/wade-fs/novel/blob/main/yuan/chapters/volume1/chap001.md")
         }
         binding.chipExampleGuixu.setOnClickListener {
-            binding.etGithubUrl.setText("https://github.com/wade-fs/novel2movie/tree/main/guixu")
+            binding.etGithubUrl.setText("https://github.com/wade-fs/novel/tree/main/song")
         }
         binding.chipExampleFormosa.setOnClickListener {
-            binding.etGithubUrl.setText("https://github.com/wade-fs/novel2movie/tree/main/Origins-of-Formosa")
+            binding.etGithubUrl.setText("https://github.com/wade-fs/novel/tree/main/sex")
         }
 
         // 下載並閱讀

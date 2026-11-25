@@ -212,16 +212,28 @@ object GitHubHelper {
 
             // 掃描目錄
             val chapters = mutableListOf<Chapter>()
+            val searchDir = if (File(destDir, "chapters").isDirectory) File(destDir, "chapters") else destDir
+
             fun scan(file: File, volIndex: Int, volName: String) {
                 if (file.isDirectory) {
                     val name = file.name
-                    val vIdx = if (name.contains("volume")) {
+                    val vIdx = if (name.contains("volume", ignoreCase = true) || name.startsWith("vol", ignoreCase = true) || name.matches(Regex("""^0*\d+$"""))) {
                         name.replace(Regex("""[^0-9]"""), "").toIntOrNull() ?: volIndex
                     } else volIndex
                     val vName = "第 ${vIdx} 卷"
                     file.listFiles()?.forEach { scan(it, vIdx, vName) }
                 } else if (file.isFile && (file.name.endsWith(".md") || file.name.endsWith(".txt"))) {
-                    val num = Regex("""\d+""").find(file.name)?.value?.toIntOrNull() ?: (chapters.size + 1)
+                    val lower = file.name.lowercase()
+                    if (lower.contains("rules") || lower.contains("outline") || lower.contains("readme") ||
+                        lower.contains("character") || lower.contains("timeline") || lower.contains("geography") ||
+                        lower.contains("audit") || lower.contains("ledger") || lower.contains("bible") ||
+                        lower.contains("social") || lower.contains("workflow") || lower.contains("progress") ||
+                        lower.contains("generator") || lower.contains("book.yaml") ||
+                        file.name.matches(Regex("""^volume\d+\.md$""", RegexOption.IGNORE_CASE))) {
+                        return
+                    }
+                    val num = Regex("""\d+""").find(file.name)?.value?.toIntOrNull() ?: 0
+                    if (num <= 0) return
                     val title = try {
                         file.bufferedReader(Charsets.UTF_8).use { r ->
                             var l: String?
@@ -252,7 +264,7 @@ object GitHubHelper {
                 }
             }
 
-            scan(destDir, 1, "第一卷")
+            scan(searchDir, 1, "第一卷")
             chapters.sortBy { it.chapterNumber }
 
             if (chapters.isEmpty()) {

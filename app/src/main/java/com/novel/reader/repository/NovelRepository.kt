@@ -86,18 +86,30 @@ class NovelRepository(private val context: Context) {
     suspend fun loadCustomDirectoryChapters(treeUri: Uri): List<Chapter> = withContext(Dispatchers.IO) {
         val chapters = mutableListOf<Chapter>()
         val rootDoc = DocumentFile.fromTreeUri(context, treeUri) ?: return@withContext emptyList()
+        val chaptersFolder = rootDoc.findFile("chapters")
+        val scanTarget = if (chaptersFolder != null && chaptersFolder.isDirectory) chaptersFolder else rootDoc
 
         fun scanFolder(docFile: DocumentFile, volIndex: Int, volName: String) {
             for (file in docFile.listFiles()) {
                 if (file.isDirectory) {
                     val name = file.name ?: ""
-                    val vIdx = if (name.contains("volume")) {
+                    val vIdx = if (name.contains("volume", ignoreCase = true) || name.startsWith("vol", ignoreCase = true) || name.matches(Regex("""^0*\d+$"""))) {
                         name.replace(Regex("""[^0-9]"""), "").toIntOrNull() ?: volIndex
                     } else volIndex
                     scanFolder(file, vIdx, "第 ${vIdx} 卷")
                 } else if (file.isFile && (file.name?.endsWith(".md") == true || file.name?.endsWith(".txt") == true)) {
                     val name = file.name ?: ""
-                    val num = Regex("""\d+""").find(name)?.value?.toIntOrNull() ?: (chapters.size + 1)
+                    val lower = name.lowercase()
+                    if (lower.contains("rules") || lower.contains("outline") || lower.contains("readme") ||
+                        lower.contains("character") || lower.contains("timeline") || lower.contains("geography") ||
+                        lower.contains("audit") || lower.contains("ledger") || lower.contains("bible") ||
+                        lower.contains("social") || lower.contains("workflow") || lower.contains("progress") ||
+                        lower.contains("generator") || lower.contains("book.yaml") ||
+                        name.matches(Regex("""^volume\d+\.md$""", RegexOption.IGNORE_CASE))) {
+                        continue
+                    }
+                    val num = Regex("""\d+""").find(name)?.value?.toIntOrNull() ?: 0
+                    if (num <= 0) continue
                     val title = readTitleFromUri(file.uri) ?: name.removeSuffix(".md").removeSuffix(".txt")
                     chapters.add(
                         Chapter(
@@ -113,7 +125,7 @@ class NovelRepository(private val context: Context) {
             }
         }
 
-        scanFolder(rootDoc, 1, "目錄")
+        scanFolder(scanTarget, 1, "目錄")
         chapters.sortBy { it.chapterNumber }
         if (chapters.isNotEmpty()) {
             cachedChapters.clear()
@@ -129,11 +141,12 @@ class NovelRepository(private val context: Context) {
      */
     private fun scanDirectoryForChapters(baseDir: File): List<Chapter> {
         val chapters = mutableListOf<Chapter>()
+        val searchDir = if (File(baseDir, "chapters").isDirectory) File(baseDir, "chapters") else baseDir
 
         fun scan(file: File, volIndex: Int, volName: String) {
             if (file.isDirectory) {
                 val name = file.name
-                val vIdx = if (name.contains("volume")) {
+                val vIdx = if (name.contains("volume", ignoreCase = true) || name.startsWith("vol", ignoreCase = true) || name.matches(Regex("""^0*\d+$"""))) {
                     name.replace(Regex("""[^0-9]"""), "").toIntOrNull() ?: volIndex
                 } else volIndex
                 val vName = when (vIdx) {
@@ -147,11 +160,18 @@ class NovelRepository(private val context: Context) {
                 }
                 file.listFiles()?.forEach { scan(it, vIdx, vName) }
             } else if (file.isFile && (file.name.endsWith(".md") || file.name.endsWith(".txt"))) {
-                // 排除純規則說明文件 (如: chapter_writer_rules.md, outline.md)
-                if (file.name.contains("rules") || file.name.contains("outline") || file.name.contains("README")) {
+                val lower = file.name.lowercase()
+                // 排除純規則說明與設定文件
+                if (lower.contains("rules") || lower.contains("outline") || lower.contains("readme") ||
+                    lower.contains("character") || lower.contains("timeline") || lower.contains("geography") ||
+                    lower.contains("audit") || lower.contains("ledger") || lower.contains("bible") ||
+                    lower.contains("social") || lower.contains("workflow") || lower.contains("progress") ||
+                    lower.contains("generator") || lower.contains("book.yaml") ||
+                    file.name.matches(Regex("""^volume\d+\.md$""", RegexOption.IGNORE_CASE))) {
                     return
                 }
                 val num = Regex("""\d+""").find(file.name)?.value?.toIntOrNull() ?: 0
+                if (num <= 0) return
                 val title = readTitleFromFile(file) ?: "第 ${num} 章"
                 chapters.add(
                     Chapter(
@@ -166,7 +186,7 @@ class NovelRepository(private val context: Context) {
             }
         }
 
-        scan(baseDir, 1, "第一卷")
+        scan(searchDir, 1, "第一卷")
         chapters.sortBy { it.chapterNumber }
         return chapters
     }

@@ -238,10 +238,11 @@ object NovelChapterParser {
     }
 
     /**
-     * 清理 Markdown 特殊符號 (如粗體 **、斜體 *、反引號 ` 等)
+     * 清理 Markdown 特殊符號 (如粗體 **、斜體 *、反引號 `、圖片等)
      */
     fun cleanMarkdownSymbols(text: String): String {
         return text
+            .replace(Regex("""!\[.*?\]\(.*?\)"""), "")
             .replace("**", "")
             .replace("*", "")
             .replace("`", "")
@@ -251,10 +252,12 @@ object NovelChapterParser {
 
     /**
      * 清理用語音發音的字元：
-     * 移除特殊括號符號以使發音流暢，保留正常停頓逗點句號
+     * 移除特殊括號符號以使發音流暢，移除圖片標籤，保留正常停頓逗點句號
      */
     fun cleanSpeechText(text: String): String {
         return text
+            .replace(Regex("""!\[.*?\]\(.*?\)"""), "")
+            .replace(Regex("""\[(.*?)\]\(.*?\)"""), "$1")
             .replace("【", "")
             .replace("】", "：")
             .replace("──", "，")

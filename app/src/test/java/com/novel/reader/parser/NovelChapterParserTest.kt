@@ -91,4 +91,35 @@ class NovelChapterParserTest {
         val hasInference = segments.any { it.category == WorkRecordCategory.INFERENCE }
         assertTrue(hasInference)
     }
+
+    @Test
+    fun testCleanSpeechTextRemovesImagesAndLinks() {
+        val rawWithImage = "天武城外。![滄瀾界風雲](../../images/02017.jpeg)滿場數萬名武者[天劍宗](https://example.com)齊聲歡呼。"
+        val cleaned = NovelChapterParser.cleanSpeechText(rawWithImage)
+        assertFalse(cleaned.contains("!["))
+        assertFalse(cleaned.contains(".jpeg"))
+        assertFalse(cleaned.contains("https://"))
+        assertTrue(cleaned.contains("天武城外。"))
+        assertTrue(cleaned.contains("天劍宗"))
+        assertTrue(cleaned.contains("齊聲歡呼。"))
+    }
+
+    @Test
+    fun testParseChapterWithMarkdownImageInBody() {
+        val md = """
+            # 第十七章　穿門踏虛，初履滄瀾
+
+            ![滄瀾界風雲](../../images/02017.jpeg)
+
+            萬界樓第二層的核心殿堂之內，一座古老高聳的青銅門扉正泛著銀藍色星漩。
+        """.trimIndent()
+
+        val parsed = NovelChapterParser.parse(md)
+        assertEquals("第十七章　穿門踏虛，初履滄瀾", parsed.title)
+        assertTrue(parsed.bodyParagraphs.isNotEmpty())
+        val segments = NovelChapterParser.buildTtsSegments(parsed, ReadingFilterConfig())
+        val speech = segments.map { it.speechText }.joinToString(" ")
+        assertFalse(speech.contains(".jpeg"))
+        assertTrue(speech.contains("萬界樓第二層"))
+    }
 }

@@ -9,12 +9,8 @@ import android.content.pm.PackageManager
 import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
 import android.os.IBinder
-import android.os.Looper
 import android.os.PowerManager
-import android.os.VibrationEffect
-import android.os.Vibrator
 import android.provider.OpenableColumns
 import android.speech.tts.Voice
 import android.view.KeyEvent
@@ -51,25 +47,6 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
     private var availableVoices: List<Voice> = emptyList()
     private var pendingSavedProgress: SavedReadingProgress? = null
     private var isImmersiveFullScreen: Boolean = true
-
-    // 長按音量鍵控制章節
-    private val keyHandler = Handler(Looper.getMainLooper())
-    private var isVolumeUpLongPressed = false
-    private var isVolumeDownLongPressed = false
-
-    private val volumeUpLongPressRunnable = Runnable {
-        isVolumeUpLongPressed = true
-        vibrateFeedback()
-        ttsService?.playNextChapter()
-        Toast.makeText(this, "長按大聲：切換至下一章", Toast.LENGTH_SHORT).show()
-    }
-
-    private val volumeDownLongPressRunnable = Runnable {
-        isVolumeDownLongPressed = true
-        vibrateFeedback()
-        ttsService?.playPreviousChapter()
-        Toast.makeText(this, "長按小聲：切換至上一章", Toast.LENGTH_SHORT).show()
-    }
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
@@ -541,72 +518,32 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val keyCode = event.keyCode
-        val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val service = ttsService
 
-        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
-            if (event.action == KeyEvent.ACTION_DOWN) {
-                if (event.repeatCount == 0) {
-                    isVolumeUpLongPressed = false
-                    keyHandler.removeCallbacks(volumeUpLongPressRunnable)
-                    keyHandler.postDelayed(volumeUpLongPressRunnable, 500)
+        if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+            val direction = if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) 1 else -1
+
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                // 只在前景（Activity 可見）時交由 FastVolumeController 處理
+                if (service != null) {
+                    service.handleVolumeAction(direction, fromHardwareKey = true)
+                    return true
                 }
-                return true
-            } else if (event.action == KeyEvent.ACTION_UP) {
-                keyHandler.removeCallbacks(volumeUpLongPressRunnable)
-                if (!isVolumeUpLongPressed) {
-                    // 短按：正常提高音量
-                    audioManager.adjustStreamVolume(
-                        AudioManager.STREAM_MUSIC,
-                        AudioManager.ADJUST_RAISE,
-                        AudioManager.FLAG_SHOW_UI
-                    )
-                }
-                isVolumeUpLongPressed = false
-                return true
             }
-        } else if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
-            if (event.action == KeyEvent.ACTION_DOWN) {
-                if (event.repeatCount == 0) {
-                    isVolumeDownLongPressed = false
-                    keyHandler.removeCallbacks(volumeDownLongPressRunnable)
-                    keyHandler.postDelayed(volumeDownLongPressRunnable, 500)
-                }
-                return true
-            } else if (event.action == KeyEvent.ACTION_UP) {
-                keyHandler.removeCallbacks(volumeDownLongPressRunnable)
-                if (!isVolumeDownLongPressed) {
-                    // 短按：正常降低音量
-                    audioManager.adjustStreamVolume(
-                        AudioManager.STREAM_MUSIC,
-                        AudioManager.ADJUST_LOWER,
-                        AudioManager.FLAG_SHOW_UI
-                    )
-                }
-                isVolumeDownLongPressed = false
-                return true
-            }
+            // ACTION_UP 和 repeatCount > 0 的長按重複事件：交給系統正常處理（已由 ACTION_DOWN 觸發 handleVolumeAction）
         }
 
         return super.dispatchKeyEvent(event)
     }
 
-    private fun vibrateFeedback() {
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val vibrator = getSystemService(Vibrator::class.java)
-                vibrator?.vibrate(VibrationEffect.createOneShot(60, VibrationEffect.DEFAULT_AMPLITUDE))
-            } else {
-                @Suppress("DEPRECATION")
-                val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
-                vibrator?.vibrate(60)
-            }
-        } catch (_: Exception) {}
+    override fun onProgressActionNotification(message: String) {
+        runOnUiThread {
+            Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+        }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        keyHandler.removeCallbacks(volumeUpLongPressRunnable)
-        keyHandler.removeCallbacks(volumeDownLongPressRunnable)
         if (isFinishing) {
             ttsService?.setAppInForeground(false)
             ttsService?.stopAndRelease()

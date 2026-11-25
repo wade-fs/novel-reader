@@ -20,6 +20,8 @@ import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.VibrationEffect
+import android.os.Vibrator
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
@@ -35,6 +37,7 @@ import com.novel.reader.model.*
 import com.novel.reader.parser.NovelChapterParser
 import com.novel.reader.repository.NovelRepository
 import com.novel.reader.ui.MainActivity
+import com.novel.reader.util.FastVolumeController
 import com.novel.reader.util.ReadingProgressManager
 import kotlinx.coroutines.*
 import java.util.*
@@ -85,24 +88,55 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
     private var isDreamingState: Boolean = false
     private var isMediaSessionReleased = false
     private var isScreenReceiverRegistered = false
+    private var isVolumeReceiverRegistered = false
 
-    fun canHandleMediaButtons(): Boolean {
-        if (isMediaSessionReleased) return false
-        if (isAppInForeground) return true
+    lateinit var fastVolumeController: FastVolumeController
+        private set
 
-        val isPlaybackActive = playbackState != PlaybackState.IDLE
-        if (!isPlaybackActive || !wasForegroundBeforeScreenOff) return false
+    private var lastHardwareKeyDispatchTime = 0L
+    private var baselineMusicVolume: Int = -1
+    private var isRestoringVolume: Boolean = false
 
+    /**
+     * 判定當前閱讀器運作環境狀態（四分法）：
+     * 1. SCREEN_ON_FOREGROUND  : 螢幕開啟且 Reader 在前景 (可見且互動中)
+     * 2. SCREEN_ON_BACKGROUND  : 螢幕開啟且 Reader 在背景 (使用者在其他 App 或桌面)
+     * 3. SCREEN_OFF_FOREGROUND : 螢幕關閉且 Reader 息屏前在前景 (放口袋/鎖屏聆聽模式)
+     * 4. SCREEN_OFF_BACKGROUND : 螢幕關閉且 Reader 在背景 (在其他 App 時關閉螢幕)
+     */
+    fun getEnvironmentState(): ReaderEnvironmentState {
         val powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
         val keyguardManager = getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
-        val isScreenOffOrLocked = (powerManager?.isInteractive == false) ||
-                (keyguardManager?.isKeyguardLocked == true) ||
-                isDreamingState
-        return isScreenOffOrLocked
+
+        val isInteractive = powerManager?.isInteractive ?: true
+        val isKeyguardLocked = keyguardManager?.isKeyguardLocked ?: false
+        val isScreenOffOrLocked = !isInteractive || isKeyguardLocked || isDreamingState
+
+        return if (isScreenOffOrLocked) {
+            if (wasForegroundBeforeScreenOff) {
+                ReaderEnvironmentState.SCREEN_OFF_FOREGROUND
+            } else {
+                ReaderEnvironmentState.SCREEN_OFF_BACKGROUND
+            }
+        } else {
+            if (isAppInForeground) {
+                ReaderEnvironmentState.SCREEN_ON_FOREGROUND
+            } else {
+                ReaderEnvironmentState.SCREEN_ON_BACKGROUND
+            }
+        }
+    }
+
+    /**
+     * 相容性方法：檢查是否允許切換朗讀進度（僅前景/息屏聆聽模式允許）
+     */
+    fun canHandleMediaButtons(): Boolean {
+        if (isMediaSessionReleased) return false
+        return getEnvironmentState().allowsProgressChange
     }
 
     fun setAppInForeground(inForeground: Boolean) {
-        Log.d("NovelTts", "setAppInForeground: $inForeground")
+        Log.d("NovelTts", "setAppInForeground: $inForeground (wasFgBeforeScreenOff=$wasForegroundBeforeScreenOff)")
         isAppInForeground = inForeground
         if (inForeground) {
             wasForegroundBeforeScreenOff = false
@@ -125,48 +159,51 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
 
     fun updateActiveState() {
         updateMediaSessionActiveState()
-        updateVolumeReceiverState()
+        // 只有在前景（螢幕開啟前景或息屏聆聽模式）且有播放/暫停狀態時才需要 volume receiver
+        if (playbackState != PlaybackState.IDLE && getEnvironmentState().allowsFastVolumeControl) {
+            registerVolumeReceiverIfNeeded()
+        } else {
+            unregisterVolumeReceiver()
+        }
     }
 
     private fun updateMediaSessionActiveState() {
         if (!::mediaSession.isInitialized || isMediaSessionReleased) return
-        val shouldBeActive = canHandleMediaButtons()
+        // 只要不是完全停止/閒置 (IDLE)，就保持 MediaSession 活躍，讓背景環境也能順利接收 Play/Pause
+        val shouldBeActive = playbackState != PlaybackState.IDLE
         if (mediaSession.isActive != shouldBeActive) {
             mediaSession.isActive = shouldBeActive
-            Log.d("NovelTts", "mediaSession.isActive set to: $shouldBeActive (fg=$isAppInForeground, screenOffListening=$wasForegroundBeforeScreenOff)")
+            Log.d("NovelTts", "mediaSession.isActive set to: $shouldBeActive (env=${getEnvironmentState()})")
         }
     }
 
-    private fun updateVolumeReceiverState() {
-        val shouldBeActive = canHandleMediaButtons()
-        if (shouldBeActive) {
-            if (!isVolumeReceiverRegistered) {
-                try {
-                    val volumeFilter = IntentFilter("android.media.VOLUME_CHANGED_ACTION")
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        registerReceiver(volumeChangeReceiver, volumeFilter, Context.RECEIVER_EXPORTED)
-                    } else {
-                        registerReceiver(volumeChangeReceiver, volumeFilter)
-                    }
-                    isVolumeReceiverRegistered = true
-                    Log.d("NovelTts", "volumeChangeReceiver registered (control active)")
-                } catch (e: Exception) {
-                    Log.e("NovelTts", "Failed to register volumeChangeReceiver", e)
-                }
+    private fun registerVolumeReceiverIfNeeded() {
+        if (isVolumeReceiverRegistered) return
+        try {
+            val volumeFilter = IntentFilter("android.media.VOLUME_CHANGED_ACTION")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(volumeChangeReceiver, volumeFilter, Context.RECEIVER_EXPORTED)
+            } else {
+                registerReceiver(volumeChangeReceiver, volumeFilter)
             }
-        } else {
-            if (isVolumeReceiverRegistered) {
-                try {
-                    unregisterReceiver(volumeChangeReceiver)
-                    Log.d("NovelTts", "volumeChangeReceiver unregistered (control inactive)")
-                } catch (e: Exception) {
-                    Log.e("NovelTts", "Failed to unregister volumeChangeReceiver", e)
-                }
-                isVolumeReceiverRegistered = false
-            }
-            volumeBurstCount = 0
-            lastVolumeChangeTime = 0L
+            isVolumeReceiverRegistered = true
+            Log.d("NovelTts", "volumeChangeReceiver registered")
+        } catch (e: Exception) {
+            Log.e("NovelTts", "Failed to register volumeChangeReceiver", e)
         }
+    }
+
+    private fun unregisterVolumeReceiver() {
+        if (!isVolumeReceiverRegistered) return
+        try {
+            unregisterReceiver(volumeChangeReceiver)
+            Log.d("NovelTts", "volumeChangeReceiver unregistered")
+        } catch (e: Exception) {
+            Log.e("NovelTts", "Failed to unregister volumeChangeReceiver", e)
+        }
+        isVolumeReceiverRegistered = false
+        if (::fastVolumeController.isInitialized) fastVolumeController.reset()
+        baselineMusicVolume = -1
     }
 
     private fun releaseMediaSession() {
@@ -189,6 +226,10 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
             when (action) {
                 Intent.ACTION_SCREEN_OFF -> {
                     isDreamingState = false
+                    if (isAppInForeground) {
+                        wasForegroundBeforeScreenOff = true
+                        isAppInForeground = false
+                    }
                     updateActiveState()
                 }
                 Intent.ACTION_SCREEN_ON -> {
@@ -203,6 +244,10 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
                 }
                 "android.intent.action.DREAMING_STARTED" -> {
                     isDreamingState = true
+                    if (isAppInForeground) {
+                        wasForegroundBeforeScreenOff = true
+                        isAppInForeground = false
+                    }
                     updateActiveState()
                 }
                 "android.intent.action.DREAMING_STOPPED" -> {
@@ -245,57 +290,127 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
         }
     }
 
-    // 監聽藍牙耳機及系統音量按鈕動作（長按或連續觸發）
-    private var lastVolumeChangeTime = 0L
-    private var lastVolumeDirection = 0
-    private var volumeBurstCount = 0
+    // 監聽藍牙耳機及系統音量變更動作
     private var lastChapterSwitchTime = 0L
-    private var isVolumeReceiverRegistered = false
 
     private val volumeChangeReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (!canHandleMediaButtons()) return
-            if (intent?.action == "android.media.VOLUME_CHANGED_ACTION") {
-                val streamType = intent.getIntExtra("android.media.EXTRA_VOLUME_STREAM_TYPE", -1)
-                if (streamType == AudioManager.STREAM_MUSIC) {
-                    val currentVol = intent.getIntExtra("android.media.EXTRA_VOLUME_STREAM_VALUE", -1)
-                    val prevVol = intent.getIntExtra("android.media.EXTRA_PREV_VOLUME_STREAM_VALUE", -1)
-                    val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-                    val now = System.currentTimeMillis()
-                    val timeDiff = now - lastVolumeChangeTime
+            if (intent?.action != "android.media.VOLUME_CHANGED_ACTION") return
+            if (isRestoringVolume) {
+                Log.d("NovelTts", "volumeChangeReceiver: Ignoring VOLUME_CHANGED_ACTION during volume restoration")
+                return
+            }
 
-                    val direction = when {
-                        currentVol > prevVol -> 1
-                        currentVol < prevVol -> -1
-                        currentVol == maxVol && prevVol == maxVol -> 1
-                        currentVol == 0 && prevVol == 0 -> -1
-                        else -> 0
+            val now = System.currentTimeMillis()
+            if (now - lastHardwareKeyDispatchTime < 250) {
+                Log.d("NovelTts", "volumeChangeReceiver: Ignoring VOLUME_CHANGED_ACTION from recent hardware key dispatch")
+                return
+            }
+
+            val env = getEnvironmentState()
+            if (!env.allowsFastVolumeControl) {
+                Log.d("NovelTts", "volumeChangeReceiver: Ignoring because env is $env (no progress changes in background)")
+                return
+            }
+
+            val streamType = intent.getIntExtra("android.media.EXTRA_VOLUME_STREAM_TYPE", -1)
+            if (streamType == AudioManager.STREAM_MUSIC) {
+                val currentVol = intent.getIntExtra("android.media.EXTRA_VOLUME_STREAM_VALUE", -1)
+                val prevVol = intent.getIntExtra("android.media.EXTRA_PREV_VOLUME_STREAM_VALUE", -1)
+                val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+
+                val direction = when {
+                    currentVol > prevVol -> 1
+                    currentVol < prevVol -> -1
+                    currentVol == maxVol && prevVol == maxVol -> 1
+                    currentVol == 0 && prevVol == 0 -> -1
+                    else -> 0
+                }
+
+                Log.d("NovelTts", "VOLUME_CHANGED: curr=$currentVol, prev=$prevVol, dir=$direction, env=$env")
+
+                if (direction != 0) {
+                    if (fastVolumeController.clickCount == 0 && prevVol >= 0) {
+                        baselineMusicVolume = prevVol
                     }
-
-                    Log.d("NovelTts", "VOLUME_CHANGED: curr=$currentVol, prev=$prevVol, dir=$direction, dt=$timeDiff, burst=$volumeBurstCount")
-
-                    if (direction != 0) {
-                        // 當在 650ms 內連續收到同方向的音量變更（藍牙耳機長按音量鍵或快速連擊）
-                        if (direction == lastVolumeDirection && timeDiff < 650) {
-                            volumeBurstCount++
-                            if (volumeBurstCount >= 2) {
-                                volumeBurstCount = 0
-                                lastVolumeChangeTime = 0L
-                                Log.d("NovelTts", "Volume Burst Triggered: direction=$direction -> switch chapter")
-                                if (direction == 1) {
-                                    playNextChapter()
-                                } else {
-                                    playPreviousChapter()
-                                }
-                            }
-                        } else {
-                            lastVolumeDirection = direction
-                            volumeBurstCount = 1
-                        }
-                        lastVolumeChangeTime = now
-                    }
+                    fastVolumeController.onVolumeEvent(direction)
                 }
             }
+        }
+    }
+
+    /**
+     * 處理音量按鍵或變更事件
+     * @param direction +1 為增加/前進，-1 為減少/後退
+     * @param fromHardwareKey 是否為實體按鍵（來自 Activity 的 dispatchKeyEvent）
+     */
+    fun handleVolumeAction(direction: Int, fromHardwareKey: Boolean = false) {
+        if (direction != 1 && direction != -1) return
+        val env = getEnvironmentState()
+        Log.d("NovelTts", "handleVolumeAction: direction=$direction, fromHardwareKey=$fromHardwareKey, env=$env")
+
+        if (!env.allowsFastVolumeControl) {
+            Log.d("NovelTts", "handleVolumeAction ignored because env is $env")
+            return
+        }
+
+        if (fromHardwareKey) {
+            lastHardwareKeyDispatchTime = System.currentTimeMillis()
+            if (fastVolumeController.clickCount == 0) {
+                baselineMusicVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+            }
+            audioManager.adjustStreamVolume(
+                AudioManager.STREAM_MUSIC,
+                if (direction == 1) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER,
+                AudioManager.FLAG_SHOW_UI
+            )
+        } else {
+            if (fastVolumeController.clickCount == 0) {
+                val currentVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+                val prevVol = currentVol - direction
+                baselineMusicVolume = prevVol.coerceIn(0, audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC))
+            }
+        }
+
+        fastVolumeController.onVolumeEvent(direction)
+    }
+
+    private fun restoreVolumeBeforeBurst() {
+        if (baselineMusicVolume >= 0) {
+            val target = baselineMusicVolume
+            isRestoringVolume = true
+            try {
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
+                Log.d("NovelTts", "Restored volume to baseline: $target")
+            } catch (e: Exception) {
+                Log.e("NovelTts", "Failed to restore volume", e)
+            } finally {
+                serviceScope.launch {
+                    delay(150)
+                    isRestoringVolume = false
+                }
+            }
+        }
+    }
+
+    private fun vibrateFeedback() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val vibrator = getSystemService(Vibrator::class.java)
+                vibrator?.vibrate(VibrationEffect.createOneShot(60, VibrationEffect.DEFAULT_AMPLITUDE))
+            } else {
+                @Suppress("DEPRECATION")
+                val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+                vibrator?.vibrate(60)
+            }
+        } catch (e: Exception) {
+            Log.e("NovelTts", "Error in vibrateFeedback", e)
+        }
+    }
+
+    private fun notifyProgressAction(message: String) {
+        serviceScope.launch(Dispatchers.Main) {
+            listeners.forEach { it.onProgressActionNotification(message) }
         }
     }
 
@@ -322,6 +437,7 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
         fun onChapterLoaded(chapter: Chapter, content: ChapterContent, segments: List<TtsSegment>, initialSegmentIndex: Int)
         fun onSegmentChanged(segmentIndex: Int, segment: TtsSegment?)
         fun onTtsReady(availableVoices: List<Voice>)
+        fun onProgressActionNotification(message: String) {}  // 段落/章節切換的 Toast 提示（有默認實作，不強制覆寫）
     }
 
     private val listeners = mutableListOf<PlaybackListener>()
@@ -356,6 +472,7 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
 
         createNotificationChannel()
         setupMediaSession()
+        setupFastVolumeController()
         tts = TextToSpeech(applicationContext, this)
 
         val screenFilter = IntentFilter().apply {
@@ -452,27 +569,31 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
                 MediaSessionCompat.FLAG_HANDLES_TRANSPORT_CONTROLS
             )
             setCallback(object : MediaSessionCompat.Callback() {
+                // =====================================================
+                // Play / Pause / Stop：前景 + 背景都允許
+                // =====================================================
                 override fun onPlay() {
-                    if (!canHandleMediaButtons()) {
-                        Log.d("NovelTts", "MediaSession: onPlay() ignored (control not active)")
-                        return
-                    }
-                    Log.d("NovelTts", "MediaSession: onPlay() called")
+                    Log.d("NovelTts", "MediaSession: onPlay() called, env=${getEnvironmentState()}")
                     this@TtsReadingService.play()
                 }
 
                 override fun onPause() {
-                    if (!canHandleMediaButtons()) {
-                        Log.d("NovelTts", "MediaSession: onPause() ignored (control not active)")
-                        return
-                    }
-                    Log.d("NovelTts", "MediaSession: onPause() called")
+                    Log.d("NovelTts", "MediaSession: onPause() called, env=${getEnvironmentState()}")
                     this@TtsReadingService.pause()
                 }
 
+                override fun onStop() {
+                    Log.d("NovelTts", "MediaSession: onStop() called, env=${getEnvironmentState()}")
+                    this@TtsReadingService.stop()
+                }
+
+                // =====================================================
+                // 進度跳轉類（下一章/上一章/FF/Rewind）：僅前景允許
+                // =====================================================
                 override fun onSkipToNext() {
-                    if (!canHandleMediaButtons()) {
-                        Log.d("NovelTts", "MediaSession: onSkipToNext() ignored (control not active)")
+                    val env = getEnvironmentState()
+                    if (env.isBackground) {
+                        Log.d("NovelTts", "MediaSession: onSkipToNext() blocked in $env")
                         return
                     }
                     Log.d("NovelTts", "MediaSession: onSkipToNext() called")
@@ -480,8 +601,9 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
                 }
 
                 override fun onSkipToPrevious() {
-                    if (!canHandleMediaButtons()) {
-                        Log.d("NovelTts", "MediaSession: onSkipToPrevious() ignored (control not active)")
+                    val env = getEnvironmentState()
+                    if (env.isBackground) {
+                        Log.d("NovelTts", "MediaSession: onSkipToPrevious() blocked in $env")
                         return
                     }
                     Log.d("NovelTts", "MediaSession: onSkipToPrevious() called")
@@ -489,8 +611,9 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
                 }
 
                 override fun onFastForward() {
-                    if (!canHandleMediaButtons()) {
-                        Log.d("NovelTts", "MediaSession: onFastForward() ignored (control not active)")
+                    val env = getEnvironmentState()
+                    if (env.isBackground) {
+                        Log.d("NovelTts", "MediaSession: onFastForward() blocked in $env")
                         return
                     }
                     Log.d("NovelTts", "MediaSession: onFastForward() called")
@@ -498,32 +621,22 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
                 }
 
                 override fun onRewind() {
-                    if (!canHandleMediaButtons()) {
-                        Log.d("NovelTts", "MediaSession: onRewind() ignored (control not active)")
+                    val env = getEnvironmentState()
+                    if (env.isBackground) {
+                        Log.d("NovelTts", "MediaSession: onRewind() blocked in $env")
                         return
                     }
                     Log.d("NovelTts", "MediaSession: onRewind() called")
                     this@TtsReadingService.playPreviousChapter()
                 }
 
-                override fun onStop() {
-                    if (!canHandleMediaButtons()) {
-                        Log.d("NovelTts", "MediaSession: onStop() ignored (control not active)")
-                        return
-                    }
-                    Log.d("NovelTts", "MediaSession: onStop() called")
-                    this@TtsReadingService.stop()
-                }
-
                 override fun onMediaButtonEvent(mediaButtonEvent: Intent?): Boolean {
-                    if (!canHandleMediaButtons()) {
-                        Log.d("NovelTts", "MediaSession: onMediaButtonEvent ignored (control not active)")
-                        return false
-                    }
+                    val env = getEnvironmentState()
                     val keyEvent = mediaButtonEvent?.getParcelableExtra<KeyEvent>(Intent.EXTRA_KEY_EVENT)
-                    Log.d("NovelTts", "MediaSession: onMediaButtonEvent keyEvent=$keyEvent")
+                    Log.d("NovelTts", "MediaSession: onMediaButtonEvent keyEvent=$keyEvent, env=$env")
                     if (keyEvent != null && keyEvent.action == KeyEvent.ACTION_DOWN) {
                         when (keyEvent.keyCode) {
+                            // ---- 播放/暫停：前景+背景都允許 ----
                             KeyEvent.KEYCODE_MEDIA_PLAY -> {
                                 Log.d("NovelTts", "MediaSession: KEYCODE_MEDIA_PLAY")
                                 play()
@@ -540,9 +653,19 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
                                 if (playbackState == PlaybackState.PLAYING) pause() else play()
                                 return true
                             }
+                            KeyEvent.KEYCODE_MEDIA_STOP -> {
+                                Log.d("NovelTts", "MediaSession: KEYCODE_MEDIA_STOP")
+                                stop()
+                                return true
+                            }
+                            // ---- 進度切換：僅前景允許 ----
                             KeyEvent.KEYCODE_MEDIA_NEXT,
                             KeyEvent.KEYCODE_MEDIA_FAST_FORWARD,
                             KeyEvent.KEYCODE_MEDIA_STEP_FORWARD -> {
+                                if (env.isBackground) {
+                                    Log.d("NovelTts", "MediaSession: KEYCODE_MEDIA_NEXT blocked in $env")
+                                    return true  // 消耗事件、不做任何事
+                                }
                                 Log.d("NovelTts", "MediaSession: KEYCODE_MEDIA_NEXT")
                                 playNextChapter()
                                 return true
@@ -550,28 +673,21 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
                             KeyEvent.KEYCODE_MEDIA_PREVIOUS,
                             KeyEvent.KEYCODE_MEDIA_REWIND,
                             KeyEvent.KEYCODE_MEDIA_STEP_BACKWARD -> {
+                                if (env.isBackground) {
+                                    Log.d("NovelTts", "MediaSession: KEYCODE_MEDIA_PREVIOUS blocked in $env")
+                                    return true  // 消耗事件、不做任何事
+                                }
                                 Log.d("NovelTts", "MediaSession: KEYCODE_MEDIA_PREVIOUS")
                                 playPreviousChapter()
                                 return true
                             }
+                            // ---- 音量鍵長按：在前景時由 FastVolumeController 統一處理（舊邏輯移除）----
+                            // 音量鍵在背景時不觸發任何進度操作
                             KeyEvent.KEYCODE_VOLUME_UP -> {
-                                if (keyEvent.isLongPress || keyEvent.repeatCount > 0) {
-                                    Log.d("NovelTts", "MediaSession: KEYCODE_VOLUME_UP long-press")
-                                    playNextChapter()
-                                    return true
-                                }
+                                return false  // 交給系統處理（正常調音量）
                             }
                             KeyEvent.KEYCODE_VOLUME_DOWN -> {
-                                if (keyEvent.isLongPress || keyEvent.repeatCount > 0) {
-                                    Log.d("NovelTts", "MediaSession: KEYCODE_VOLUME_DOWN long-press")
-                                    playPreviousChapter()
-                                    return true
-                                }
-                            }
-                            KeyEvent.KEYCODE_MEDIA_STOP -> {
-                                Log.d("NovelTts", "MediaSession: KEYCODE_MEDIA_STOP")
-                                stop()
-                                return true
+                                return false  // 交給系統處理（正常調音量）
                             }
                         }
                     }
@@ -581,6 +697,44 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
             isActive = false
         }
         updateMediaSessionPlaybackState()
+    }
+
+    private fun setupFastVolumeController() {
+        fastVolumeController = FastVolumeController(
+            windowMs = 500L,
+            onParagraphForward = {
+                Log.d("NovelTts", "FastVolumeController: paragraph forward")
+                restoreVolumeBeforeBurst()
+                vibrateFeedback()
+                notifyProgressAction("⏩ 前進一段落")
+                nextSegment()
+            },
+            onParagraphBackward = {
+                Log.d("NovelTts", "FastVolumeController: paragraph backward")
+                restoreVolumeBeforeBurst()
+                vibrateFeedback()
+                notifyProgressAction("⏪ 後退一段落")
+                previousSegment()
+            },
+            onChapterForward = {
+                Log.d("NovelTts", "FastVolumeController: chapter forward")
+                restoreVolumeBeforeBurst()
+                vibrateFeedback()
+                notifyProgressAction("⏭ 前進一章")
+                playNextChapter()
+            },
+            onChapterBackward = {
+                Log.d("NovelTts", "FastVolumeController: chapter backward")
+                restoreVolumeBeforeBurst()
+                vibrateFeedback()
+                notifyProgressAction("⏮ 後退一章")
+                playPreviousChapter()
+            },
+            onSingleVolumeClick = { direction ->
+                // 單次按鍵：只調音量，不更改進度（已由 MainActivity.dispatchKeyEvent 調整過，此處僅記 log）
+                Log.d("NovelTts", "FastVolumeController: single volume click dir=$direction, no progress change")
+            }
+        )
     }
 
     fun updateMediaSessionPlaybackState() {
@@ -706,16 +860,12 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
         if (intent != null) {
             val isMediaButton = intent.action == Intent.ACTION_MEDIA_BUTTON || intent.hasExtra(Intent.EXTRA_KEY_EVENT)
             if (isMediaButton) {
-                if (!canHandleMediaButtons()) {
-                    Log.d("NovelTts", "onStartCommand: Media button ignored because control is not active")
-                    return START_NOT_STICKY
-                }
-                val keyEvent = intent.getParcelableExtra<KeyEvent>(Intent.EXTRA_KEY_EVENT)
-                if (keyEvent != null) {
-                    Log.d("NovelTts", "onStartCommand: MediaButton KeyEvent=$keyEvent")
-                }
+                // 媒體按鈕：只要 MediaSession 有效就轉發，讓 MediaSession Callback 決定是否允許（已區分前/背景）
                 if (::mediaSession.isInitialized && !isMediaSessionReleased) {
+                    Log.d("NovelTts", "onStartCommand: forwarding MediaButton to MediaSession")
                     MediaButtonReceiver.handleIntent(mediaSession, intent)
+                } else {
+                    Log.d("NovelTts", "onStartCommand: MediaSession not ready, ignoring media button")
                 }
                 return START_NOT_STICKY
             }
@@ -723,6 +873,7 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
         when (intent?.action) {
             ACTION_PLAY -> play()
             ACTION_PAUSE -> pause()
+            // 通知列章節切換按鈕：無論前/背景都允許（使用者主動點選通知列）
             ACTION_PREV_CHAPTER -> playPreviousChapter()
             ACTION_NEXT_CHAPTER -> playNextChapter()
             ACTION_STOP -> stop()
@@ -794,7 +945,8 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
         startSilentAudio()
         registerNoisyReceiver()
         playbackState = PlaybackState.PLAYING
-        updateActiveState()
+        updateMediaSessionActiveState()
+        registerVolumeReceiverIfNeeded()
 
         startForeground(NOTIFICATION_ID, buildNotification())
         notifyPlaybackState(playbackState)
@@ -807,9 +959,10 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
      */
     fun pause() {
         playbackState = PlaybackState.PAUSED
-        updateActiveState()
         tts?.stop()
         pauseSilentAudio()
+        updateMediaSessionActiveState()
+        // 暫停時仍保持 volumeChangeReceiver 有效（讓使用者在鎖屏暫停後還能用耳機恢復播放）
         saveCurrentProgress()
         notifyPlaybackState(playbackState)
         updateMediaSessionPlaybackState()
@@ -822,9 +975,12 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
      */
     fun stop() {
         playbackState = PlaybackState.IDLE
-        updateActiveState()
         tts?.stop()
         stopSilentAudio()
+        unregisterVolumeReceiver()
+        updateMediaSessionActiveState()
+        fastVolumeController.reset()
+        baselineMusicVolume = -1
         saveCurrentProgress()
         currentSegmentIndex = 0
         notifyPlaybackState(playbackState)
@@ -1220,17 +1376,12 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
         stopSilentAudio()
         abandonAudioFocus()
         unregisterNoisyReceiver()
+        unregisterVolumeReceiver()
         if (isScreenReceiverRegistered) {
             try {
                 unregisterReceiver(screenStateReceiver)
             } catch (_: Exception) {}
             isScreenReceiverRegistered = false
-        }
-        if (isVolumeReceiverRegistered) {
-            try {
-                unregisterReceiver(volumeChangeReceiver)
-            } catch (_: Exception) {}
-            isVolumeReceiverRegistered = false
         }
         releaseMediaSession()
     }
