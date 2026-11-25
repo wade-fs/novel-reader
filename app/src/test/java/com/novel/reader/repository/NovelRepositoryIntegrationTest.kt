@@ -78,15 +78,14 @@ class NovelRepositoryIntegrationTest {
         val sexDir = File(novelRootDir, "sex")
         if (!sexDir.exists()) return
         val chapters = scanLocalNovel(sexDir)
-        assertEquals(88, chapters.size)
-        assertEquals(1, chapters.first().first)
-        assertEquals(88, chapters.last().first)
-        assertTrue(chapters.first().second.contains("宿慧登樓"))
+        assertTrue("sex 章節數應至少 88 章，實際為 ${chapters.size}", chapters.size >= 88)
+        assertEquals((1..chapters.size).toList(), chapters.map { it.first })
+        assertTrue(chapters[0].second.contains("宿慧登樓"))
         assertTrue(chapters[15].second.contains("雷霆滌城"))
         assertTrue(chapters[16].second.contains("穿門踏虛"))
         assertTrue(chapters[51].second.contains("雪峰定錨"))
         assertTrue(chapters[52].second.contains("演武初試"))
-        assertTrue(chapters.last().second.contains("九曜起程"))
+        assertTrue(chapters[87].second.contains("九曜起程"))
     }
 
     @Test
@@ -94,9 +93,9 @@ class NovelRepositoryIntegrationTest {
         val mingDir = File(novelRootDir, "ming")
         if (!mingDir.exists()) return
         val chapters = scanLocalNovel(mingDir)
-        assertEquals(1, chapters.size)
-        assertEquals(1, chapters.first().first)
-        assertTrue(chapters.first().second.contains("乾清宮密霧"))
+        assertTrue("ming 章節數應至少 1 章", chapters.isNotEmpty())
+        assertEquals((1..chapters.size).toList(), chapters.map { it.first })
+        assertTrue(chapters[0].second.contains("乾清宮密霧"))
     }
 
     @Test

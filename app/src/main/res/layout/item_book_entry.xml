@@ -53,7 +53,7 @@
                     android:paddingHorizontal="6dp"
                     android:paddingVertical="2dp"
                     android:text="閱讀中"
-                    android:textColor="@android:color/white"
+                    android:textColor="@color/on_primary"
                     android:textSize="10sp"
                     android:textStyle="bold"
                     android:visibility="gone" />

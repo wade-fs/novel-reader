@@ -2,6 +2,7 @@ package com.novel.reader.util
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.novel.reader.model.AppThemeMode
 import com.novel.reader.model.ReadingFilterConfig
 import com.novel.reader.model.ReadingSettings
 import com.novel.reader.model.VoiceGender
@@ -40,6 +41,8 @@ class ReadingProgressManager(context: Context) {
         private const val KEY_GENDER = "setting_gender"
         private const val KEY_VOICE_NAME = "setting_voice_name"
         private const val KEY_AUTO_NEXT = "setting_auto_next"
+        private const val KEY_FONT_SIZE_SP = "setting_font_size_sp"
+        private const val KEY_THEME_MODE = "setting_theme_mode"
 
         // Filter keys（僅保留是否朗讀章名，工作紀錄一律濾除）
         private const val KEY_FILTER_TITLE = "filter_read_title"
@@ -145,7 +148,7 @@ class ReadingProgressManager(context: Context) {
     }
 
     /**
-     * 儲存語音與章節過濾偏好設定
+     * 儲存閱讀外觀、語音與章節過濾偏好設定
      */
     fun saveSettings(settings: ReadingSettings) {
         prefs.edit()
@@ -155,11 +158,13 @@ class ReadingProgressManager(context: Context) {
             .putString(KEY_VOICE_NAME, settings.selectedVoiceName)
             .putBoolean(KEY_AUTO_NEXT, settings.autoNextChapter)
             .putBoolean(KEY_FILTER_TITLE, settings.filterConfig.readChapterTitle)
+            .putFloat(KEY_FONT_SIZE_SP, ReadingSettings.clampFontSizeSp(settings.fontSizeSp))
+            .putString(KEY_THEME_MODE, settings.themeMode.name)
             .apply()
     }
 
     /**
-     * 載入語音與章節過濾偏好設定
+     * 載入閱讀外觀、語音與章節過濾偏好設定
      */
     fun loadSettings(): ReadingSettings {
         val genderStr = prefs.getString(KEY_GENDER, VoiceGender.DEFAULT.name)
@@ -173,13 +178,20 @@ class ReadingProgressManager(context: Context) {
             readChapterTitle = prefs.getBoolean(KEY_FILTER_TITLE, true)
         )
 
+        val fontSizeSp = ReadingSettings.clampFontSizeSp(
+            prefs.getFloat(KEY_FONT_SIZE_SP, ReadingSettings.DEFAULT_FONT_SIZE_SP)
+        )
+        val themeMode = AppThemeMode.fromName(prefs.getString(KEY_THEME_MODE, AppThemeMode.SYSTEM.name))
+
         return ReadingSettings(
             speechRate = prefs.getFloat(KEY_SPEED, 1.0f),
             pitch = prefs.getFloat(KEY_PITCH, 1.0f),
             gender = gender,
             selectedVoiceName = prefs.getString(KEY_VOICE_NAME, null),
             autoNextChapter = prefs.getBoolean(KEY_AUTO_NEXT, true),
-            filterConfig = filter
+            filterConfig = filter,
+            fontSizeSp = fontSizeSp,
+            themeMode = themeMode
         )
     }
 }

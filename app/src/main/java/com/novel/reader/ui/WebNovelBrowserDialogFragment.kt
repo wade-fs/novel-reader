@@ -2,6 +2,7 @@ package com.novel.reader.ui
 
 import android.annotation.SuppressLint
 import android.app.Dialog
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -18,6 +19,7 @@ import android.webkit.WebViewClient
 import android.widget.Toast
 import androidx.fragment.app.DialogFragment
 import androidx.lifecycle.lifecycleScope
+import com.novel.reader.R
 import com.novel.reader.databinding.DialogWebNovelBrowserBinding
 import com.novel.reader.util.WebAdBlocker
 import com.novel.reader.util.WebBookImportResult
@@ -41,6 +43,8 @@ class WebNovelBrowserDialogFragment(
     private val onChapterHtmlReady: ((html: String, finalUrl: String) -> Unit)? = null
 ) : DialogFragment() {
 
+    constructor() : this("")
+
     enum class Mode {
         IMPORT_BOOK,       // 匯入整本書目錄或單一章節至書單
         VERIFY_CHAPTER     // 閱讀中途網站要求驗證時，通過驗證後自動抽回該章內容
@@ -58,7 +62,11 @@ class WebNovelBrowserDialogFragment(
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setStyle(STYLE_NORMAL, android.R.style.Theme_Material_Light_NoActionBar_Fullscreen)
+        if (savedInstanceState != null || initialUrl.isBlank()) {
+            dismissAllowingStateLoss()
+            return
+        }
+        setStyle(STYLE_NORMAL, R.style.Theme_NovelReader_FullscreenDialog)
     }
 
     override fun onCreateDialog(savedInstanceState: Bundle?): Dialog {
@@ -116,6 +124,9 @@ class WebNovelBrowserDialogFragment(
             builtInZoomControls = true
             displayZoomControls = false
             cacheMode = WebSettings.LOAD_DEFAULT
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                isAlgorithmicDarkeningAllowed = true
+            }
         }
 
         CookieManager.getInstance().setAcceptCookie(true)

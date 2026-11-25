@@ -49,6 +49,8 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:hint="輸入章號 (例如: 128)"
+                android:textColor="@color/text_primary"
+                android:textColorHint="@color/text_hint"
                 android:inputType="number"
                 android:textSize="15sp"
                 android:maxLines="1" />
@@ -61,7 +63,7 @@
             android:layout_height="48dp"
             android:text="前往 ➔"
             android:backgroundTint="@color/primary"
-            android:textColor="@android:color/white"
+            android:textColor="@color/on_primary"
             app:cornerRadius="12dp" />
 
     </LinearLayout>
@@ -103,7 +105,8 @@
         android:stepSize="1"
         android:value="1"
         app:thumbColor="@color/primary"
-        app:trackColorActive="@color/primary" />
+        app:trackColorActive="@color/primary"
+        app:trackColorInactive="@color/divider" />
 
     <!-- 預覽章名 -->
     <TextView

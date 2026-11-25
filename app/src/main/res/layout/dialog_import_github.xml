@@ -55,6 +55,8 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:hint="貼上小說網站網址或 GitHub 網址..."
+                android:textColor="@color/text_primary"
+                android:textColorHint="@color/text_hint"
                 android:textSize="13sp"
                 android:maxLines="3"
                 android:inputType="textUri" />
@@ -154,7 +156,7 @@
             android:layout_marginTop="16dp"
             android:text="抓取並加入書單朗讀"
             android:backgroundTint="@color/primary"
-            android:textColor="@android:color/white"
+            android:textColor="@color/on_primary"
             app:cornerRadius="24dp" />
 
         <!-- 直接用內建防廣告瀏覽器開啟 -->

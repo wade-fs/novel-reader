@@ -25,8 +25,17 @@ class ImportBottomSheetDialogFragment(
     private val onPickDirectory: () -> Unit
 ) : BottomSheetDialogFragment() {
 
+    constructor() : this({}, {}, {}, {}, {})
+
     private var _binding: DialogImportGithubBinding? = null
     private val binding get() = _binding!!
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        if (savedInstanceState != null) {
+            dismissAllowingStateLoss()
+        }
+    }
 
     override fun onCreateView(
         inflater: LayoutInflater,

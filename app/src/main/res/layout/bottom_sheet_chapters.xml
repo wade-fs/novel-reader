@@ -72,6 +72,8 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:hint="搜尋關鍵字或輸入章號直達..."
+                android:textColor="@color/text_primary"
+                android:textColorHint="@color/text_hint"
                 android:textSize="13sp"
                 android:maxLines="1"
                 android:imeOptions="actionGo"

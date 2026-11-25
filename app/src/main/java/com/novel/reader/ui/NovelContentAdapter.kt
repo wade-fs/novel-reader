@@ -1,6 +1,7 @@
 package com.novel.reader.ui
 
 import android.graphics.Color
+import android.util.TypedValue
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -10,17 +11,20 @@ import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.RecyclerView
 import com.novel.reader.R
 import com.novel.reader.model.ChapterContent
+import com.novel.reader.model.ReadingSettings
 
 class NovelContentAdapter(
     private val onItemClick: (uiPosition: Int) -> Unit,
     private val onPrevChapterClick: () -> Unit,
-    private val onNextChapterClick: () -> Unit
+    private val onNextChapterClick: () -> Unit,
+    initialFontSizeSp: Float = ReadingSettings.DEFAULT_FONT_SIZE_SP
 ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
     companion object {
         const val TYPE_TITLE = 0
         const val TYPE_PARAGRAPH = 1
         const val TYPE_NAV_FOOTER = 4
+        private const val PAYLOAD_FONT_SIZE = "payload_font_size"
     }
 
     sealed class DisplayItem(val uiPosition: Int) {
@@ -31,6 +35,18 @@ class NovelContentAdapter(
 
     private val items = mutableListOf<DisplayItem>()
     private var activeUiPosition: Int = -1
+    private var fontSizeSp: Float = ReadingSettings.clampFontSizeSp(initialFontSizeSp)
+
+    fun setFontSizeSp(sizeSp: Float) {
+        val clamped = ReadingSettings.clampFontSizeSp(sizeSp)
+        if (fontSizeSp == clamped) return
+        fontSizeSp = clamped
+        if (items.isNotEmpty()) {
+            notifyItemRangeChanged(0, items.size, PAYLOAD_FONT_SIZE)
+        }
+    }
+
+    fun getFontSizeSp(): Float = fontSizeSp
 
     fun setContent(chapterContent: ChapterContent, hasPrev: Boolean = true, hasNext: Boolean = true) {
         items.clear()
@@ -105,6 +121,18 @@ class NovelContentAdapter(
         }
     }
 
+    override fun onBindViewHolder(
+        holder: RecyclerView.ViewHolder,
+        position: Int,
+        payloads: MutableList<Any>
+    ) {
+        if (payloads.isNotEmpty() && payloads.all { it == PAYLOAD_FONT_SIZE }) {
+            applyFontSize(holder)
+            return
+        }
+        super.onBindViewHolder(holder, position, payloads)
+    }
+
     override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
         val item = items[position]
         val isSpeaking = (item.uiPosition == activeUiPosition)
@@ -113,11 +141,13 @@ class NovelContentAdapter(
             is TitleViewHolder -> {
                 val titleItem = item as DisplayItem.TitleItem
                 holder.tvTitle.text = titleItem.title
+                applyFontSize(holder)
                 holder.itemView.setOnClickListener { onItemClick(item.uiPosition) }
             }
             is ParagraphViewHolder -> {
                 val paraItem = item as DisplayItem.ParagraphItem
                 holder.tvText.text = "\u3000\u3000" + paraItem.text
+                applyFontSize(holder)
                 holder.indicator.visibility = if (isSpeaking) View.VISIBLE else View.INVISIBLE
                 holder.container.setBackgroundColor(
                     if (isSpeaking) ContextCompat.getColor(holder.itemView.context, R.color.highlight_speaking)
@@ -131,6 +161,20 @@ class NovelContentAdapter(
                 holder.btnNext.isEnabled = footerItem.hasNext
                 holder.btnPrev.setOnClickListener { onPrevChapterClick() }
                 holder.btnNext.setOnClickListener { onNextChapterClick() }
+            }
+        }
+    }
+
+    private fun applyFontSize(holder: RecyclerView.ViewHolder) {
+        when (holder) {
+            is TitleViewHolder -> {
+                holder.tvTitle.setTextSize(
+                    TypedValue.COMPLEX_UNIT_SP,
+                    ReadingSettings.chapterTitleSizeSp(fontSizeSp)
+                )
+            }
+            is ParagraphViewHolder -> {
+                holder.tvText.setTextSize(TypedValue.COMPLEX_UNIT_SP, fontSizeSp)
             }
         }
     }

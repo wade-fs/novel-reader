@@ -117,7 +117,7 @@
             android:layout_marginTop="8dp"
             android:text="匯入此頁面小說並開始朗讀"
             android:backgroundTint="@color/primary"
-            android:textColor="@android:color/white"
+            android:textColor="@color/on_primary"
             app:cornerRadius="22dp" />
     </LinearLayout>
 

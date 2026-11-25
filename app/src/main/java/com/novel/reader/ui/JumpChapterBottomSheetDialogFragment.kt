@@ -15,8 +15,17 @@ class JumpChapterBottomSheetDialogFragment(
     private val onJumpToChapter: (chapterIndex: Int) -> Unit
 ) : BottomSheetDialogFragment() {
 
+    constructor() : this(emptyList(), 0, {})
+
     private var _binding: DialogJumpChapterBinding? = null
     private val binding get() = _binding!!
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        if (savedInstanceState != null) {
+            dismissAllowingStateLoss()
+        }
+    }
 
     override fun onCreateView(
         inflater: LayoutInflater,

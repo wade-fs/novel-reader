@@ -2,6 +2,7 @@ package com.novel.reader.ui
 
 import android.os.Bundle
 import android.speech.tts.Voice
+import android.util.TypedValue
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -10,18 +11,36 @@ import android.widget.ArrayAdapter
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import com.novel.reader.R
 import com.novel.reader.databinding.BottomSheetSettingsBinding
+import com.novel.reader.model.AppThemeMode
 import com.novel.reader.model.ReadingSettings
 import com.novel.reader.model.VoiceGender
+import kotlin.math.roundToInt
 
-class SettingsBottomSheetDialogFragment(
-    private var settings: ReadingSettings,
-    private val availableVoices: List<Voice>,
-    private val onSettingsChanged: (ReadingSettings) -> Unit
-) : BottomSheetDialogFragment() {
+class SettingsBottomSheetDialogFragment : BottomSheetDialogFragment() {
+
+    interface Host {
+        fun getCurrentReadingSettings(): ReadingSettings
+        fun getAvailableTtsVoices(): List<Voice>
+        fun onReadingSettingsChanged(newSettings: ReadingSettings)
+    }
+
+    companion object {
+        const val TAG = "SettingsSheet"
+
+        fun newInstance(): SettingsBottomSheetDialogFragment {
+            return SettingsBottomSheetDialogFragment()
+        }
+    }
 
     private var _binding: BottomSheetSettingsBinding? = null
     private val binding get() = _binding!!
+    private var settings: ReadingSettings = ReadingSettings()
+    private var availableVoices: List<Voice> = emptyList()
     private var isUpdatingUi = false
+    private var lastSpinnerPosition: Int = 0
+
+    private val host: Host?
+        get() = activity as? Host
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -34,11 +53,62 @@ class SettingsBottomSheetDialogFragment(
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+        val currentHost = host
+        if (currentHost == null) {
+            dismissAllowingStateLoss()
+            return
+        }
+        settings = currentHost.getCurrentReadingSettings().deepCopy()
+        availableVoices = currentHost.getAvailableTtsVoices()
+
         setupViews()
         syncUiFromSettings()
     }
 
+    fun updateAvailableVoices(voices: List<Voice>) {
+        availableVoices = voices
+        if (_binding != null) {
+            bindVoicesSpinner()
+        }
+    }
+
     private fun setupViews() {
+        // 0. 外觀主題切換（跟隨系統 / 淺色 / 深色）
+        binding.chipGroupTheme.setOnCheckedStateChangeListener { _, checkedIds ->
+            if (isUpdatingUi) return@setOnCheckedStateChangeListener
+            val newTheme = when (checkedIds.firstOrNull()) {
+                R.id.chipThemeLight -> AppThemeMode.LIGHT
+                R.id.chipThemeDark -> AppThemeMode.DARK
+                R.id.chipThemeSystem -> AppThemeMode.SYSTEM
+                else -> return@setOnCheckedStateChangeListener
+            }
+            if (settings.themeMode != newTheme) {
+                settings.themeMode = newTheme
+                notifyChange()
+            }
+        }
+
+        // 0.5 閱讀字體大小調整（A- / Slider / A+ / 快速尺寸）
+        binding.sliderFontSize.addOnChangeListener { _, value, fromUser ->
+            if (fromUser) {
+                val clamped = ReadingSettings.clampFontSizeSp(value)
+                settings.fontSizeSp = clamped
+                updateFontSizeDisplay(clamped, updateSlider = false)
+                notifyChange()
+            }
+        }
+        binding.btnFontSizeDecrease.setOnClickListener {
+            setFontSize(settings.fontSizeSp - ReadingSettings.FONT_SIZE_STEP_SP)
+        }
+        binding.btnFontSizeIncrease.setOnClickListener {
+            setFontSize(settings.fontSizeSp + ReadingSettings.FONT_SIZE_STEP_SP)
+        }
+        binding.btnFontSize14.setOnClickListener { setFontSize(14f) }
+        binding.btnFontSize17.setOnClickListener { setFontSize(17f) }
+        binding.btnFontSize20.setOnClickListener { setFontSize(20f) }
+        binding.btnFontSize24.setOnClickListener { setFontSize(24f) }
+        binding.btnFontSize28.setOnClickListener { setFontSize(28f) }
+
         // 1. 朗讀模式切換（讀章名+正文 / 只讀正文）
         binding.chipGroupPresetModes.setOnCheckedStateChangeListener { _, checkedIds ->
             if (isUpdatingUi) return@setOnCheckedStateChangeListener
@@ -91,21 +161,11 @@ class SettingsBottomSheetDialogFragment(
         }
 
         // 系統語音下拉清單
-        val voiceNames = mutableListOf("🇹🇼 系統預設語音 (優先台灣口音)")
-        voiceNames.addAll(availableVoices.map { formatVoiceLabel(it) })
-        val voiceAdapter = ArrayAdapter(requireContext(), android.R.layout.simple_spinner_dropdown_item, voiceNames)
-        binding.spinnerVoices.adapter = voiceAdapter
-
-        val selectedIdx = availableVoices.indexOfFirst { it.name == settings.selectedVoiceName }
-        if (selectedIdx != -1) {
-            binding.spinnerVoices.setSelection(selectedIdx + 1)
-        } else {
-            binding.spinnerVoices.setSelection(0)
-        }
-
+        bindVoicesSpinner()
         binding.spinnerVoices.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                if (isUpdatingUi) return
+                if (isUpdatingUi || position == lastSpinnerPosition) return
+                lastSpinnerPosition = position
                 if (position == 0) {
                     settings.selectedVoiceName = null
                 } else {
@@ -113,6 +173,7 @@ class SettingsBottomSheetDialogFragment(
                 }
                 notifyChange()
             }
+
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
 
@@ -141,6 +202,46 @@ class SettingsBottomSheetDialogFragment(
         }
     }
 
+    private fun bindVoicesSpinner() {
+        val wasUpdating = isUpdatingUi
+        isUpdatingUi = true
+        val voiceNames = mutableListOf("🇹🇼 系統預設語音 (優先台灣口音)")
+        voiceNames.addAll(availableVoices.map { formatVoiceLabel(it) })
+        val voiceAdapter = ArrayAdapter(
+            requireContext(),
+            R.layout.item_spinner_voice,
+            android.R.id.text1,
+            voiceNames
+        )
+        voiceAdapter.setDropDownViewResource(R.layout.item_spinner_voice)
+        binding.spinnerVoices.adapter = voiceAdapter
+
+        val selectedIdx = availableVoices.indexOfFirst { it.name == settings.selectedVoiceName }
+        val targetPos = if (selectedIdx != -1) selectedIdx + 1 else 0
+        lastSpinnerPosition = targetPos
+        binding.spinnerVoices.setSelection(targetPos, false)
+        isUpdatingUi = wasUpdating
+    }
+
+    private fun setFontSize(sizeSp: Float) {
+        val clamped = ReadingSettings.clampFontSizeSp(sizeSp).roundToInt().toFloat()
+        if (settings.fontSizeSp == clamped) return
+        settings.fontSizeSp = clamped
+        updateFontSizeDisplay(clamped, updateSlider = true)
+        notifyChange()
+    }
+
+    private fun updateFontSizeDisplay(sizeSp: Float, updateSlider: Boolean) {
+        val clamped = ReadingSettings.clampFontSizeSp(sizeSp)
+        if (updateSlider) {
+            binding.sliderFontSize.value = clamped
+        }
+        binding.tvFontSizeValue.text = "${clamped.roundToInt()} sp"
+        binding.tvFontSizePreview.setTextSize(TypedValue.COMPLEX_UNIT_SP, clamped)
+        binding.btnFontSizeDecrease.isEnabled = clamped > ReadingSettings.MIN_FONT_SIZE_SP
+        binding.btnFontSizeIncrease.isEnabled = clamped < ReadingSettings.MAX_FONT_SIZE_SP
+    }
+
     private fun setSpeed(speed: Float) {
         settings.speechRate = speed
         binding.sliderSpeed.value = speed
@@ -150,6 +251,16 @@ class SettingsBottomSheetDialogFragment(
 
     private fun syncUiFromSettings() {
         isUpdatingUi = true
+
+        // 外觀主題
+        when (settings.themeMode) {
+            AppThemeMode.SYSTEM -> binding.chipThemeSystem.isChecked = true
+            AppThemeMode.LIGHT -> binding.chipThemeLight.isChecked = true
+            AppThemeMode.DARK -> binding.chipThemeDark.isChecked = true
+        }
+
+        // 字體大小
+        updateFontSizeDisplay(settings.fontSizeSp, updateSlider = true)
 
         // 語速
         binding.sliderSpeed.value = settings.speechRate.coerceIn(0.5f, 2.5f)
@@ -174,10 +285,11 @@ class SettingsBottomSheetDialogFragment(
     }
 
     private fun syncFilterUi() {
+        val wasUpdating = isUpdatingUi
         isUpdatingUi = true
         binding.switchReadTitle.isChecked = settings.filterConfig.readChapterTitle
         updatePresetChipsSelection()
-        isUpdatingUi = false
+        isUpdatingUi = wasUpdating
     }
 
     private fun updatePresetChipsSelection() {
@@ -215,13 +327,17 @@ class SettingsBottomSheetDialogFragment(
                 intent.flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK
                 startActivity(intent)
             } catch (e2: Exception) {
-                android.widget.Toast.makeText(requireContext(), "請至 Android「系統設定 ➔ 系統 ➔ 語言與輸入 ➔ 文字轉語音輸出」下載台灣語音", android.widget.Toast.LENGTH_LONG).show()
+                android.widget.Toast.makeText(
+                    requireContext(),
+                    "請至 Android「系統設定 ➔ 系統 ➔ 語言與輸入 ➔ 文字轉語音輸出」下載台灣語音",
+                    android.widget.Toast.LENGTH_LONG
+                ).show()
             }
         }
     }
 
     private fun notifyChange() {
-        onSettingsChanged(settings)
+        host?.onReadingSettingsChanged(settings.deepCopy())
     }
 
     override fun onDestroyView() {

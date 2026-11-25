@@ -1157,23 +1157,35 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
     }
 
     /**
-     * 更新語速、語調、性別及過濾設定，並持久化至 SharedPreferences
+     * 更新外觀、語速、語調、性別及過濾設定，並持久化至 SharedPreferences
      */
     fun updateSettings(newSettings: ReadingSettings) {
-        this.settings = newSettings
-        progressManager.saveSettings(newSettings)
+        val oldSettings = this.settings
+        val normalized = newSettings.deepCopy()
+        val ttsChanged = oldSettings.speechRate != normalized.speechRate ||
+            oldSettings.pitch != normalized.pitch ||
+            oldSettings.gender != normalized.gender ||
+            oldSettings.selectedVoiceName != normalized.selectedVoiceName
+        val filterChanged = oldSettings.filterConfig.readChapterTitle != normalized.filterConfig.readChapterTitle
 
-        applyTtsParameters()
-        val curSeg = currentSegments.getOrNull(currentSegmentIndex)
-        regenerateSegments()
-        if (curSeg != null) {
-            val newIdx = currentSegments.indexOfFirst { it.id == curSeg.id || it.uiPosition == curSeg.uiPosition }
-            currentSegmentIndex = if (newIdx != -1) newIdx else 0
+        this.settings = normalized
+        progressManager.saveSettings(normalized)
+
+        if (ttsChanged) {
+            applyTtsParameters()
         }
-        val chapter = chapters.getOrNull(currentChapterIndex)
-        val content = currentContent
-        if (chapter != null && content != null) {
-            notifyChapterLoaded(chapter, content, currentSegments, currentSegmentIndex)
+        if (filterChanged) {
+            val curSeg = currentSegments.getOrNull(currentSegmentIndex)
+            regenerateSegments()
+            if (curSeg != null) {
+                val newIdx = currentSegments.indexOfFirst { it.id == curSeg.id || it.uiPosition == curSeg.uiPosition }
+                currentSegmentIndex = if (newIdx != -1) newIdx else 0
+            }
+            val chapter = chapters.getOrNull(currentChapterIndex)
+            val content = currentContent
+            if (chapter != null && content != null) {
+                notifyChapterLoaded(chapter, content, currentSegments, currentSegmentIndex)
+            }
         }
     }
 

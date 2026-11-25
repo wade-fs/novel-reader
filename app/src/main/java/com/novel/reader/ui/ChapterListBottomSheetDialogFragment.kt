@@ -20,9 +20,18 @@ class ChapterListBottomSheetDialogFragment(
     private val onSelectChapter: (index: Int) -> Unit
 ) : BottomSheetDialogFragment() {
 
+    constructor() : this(emptyList(), 0, {})
+
     private var _binding: BottomSheetChaptersBinding? = null
     private val binding get() = _binding!!
     private lateinit var adapter: ChapterListAdapter
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        if (savedInstanceState != null) {
+            dismissAllowingStateLoss()
+        }
+    }
 
     override fun onCreateView(
         inflater: LayoutInflater,

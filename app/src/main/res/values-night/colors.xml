@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="primary">#D89C89</color>
+    <color name="primary_dark">#E6B5A4</color>
+    <color name="on_primary">#2B150E</color>
+    <color name="primary_container">#3A2923</color>
+    <color name="on_primary_container">#F7E3DC</color>
+    <color name="accent">#E5A26B</color>
+    <color name="bg_paper">#141210</color>
+    <color name="bg_card">#1F1B18</color>
+    <color name="text_primary">#EAE3DC</color>
+    <color name="text_secondary">#AFA69E</color>
+    <color name="text_hint">#7E756E</color>
+    <color name="divider">#332D28</color>
+    <color name="outline">#564D46</color>
+    <color name="highlight_speaking">#3B311E</color>
+    <color name="highlight_border">#D99B4E</color>
+    <color name="badge_work_record">#322B25</color>
+    <color name="badge_work_record_text">#DECBB9</color>
+    <color name="chip_checked">#D89C89</color>
+    <color name="chip_checked_text">#2B150E</color>
+</resources>

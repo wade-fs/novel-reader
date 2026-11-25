@@ -27,6 +27,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import com.novel.reader.R
 import com.novel.reader.databinding.ActivityMainBinding
 import com.novel.reader.model.*
@@ -36,11 +37,20 @@ import com.novel.reader.util.BookLibraryManager
 import com.novel.reader.util.GitHubLoadResult
 import com.novel.reader.util.ReadingProgressManager
 import com.novel.reader.util.SavedReadingProgress
+import com.novel.reader.util.ThemeManager
 import com.novel.reader.util.WebBookImportResult
 import kotlinx.coroutines.launch
 import java.io.File
 
-class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
+class MainActivity : AppCompatActivity(),
+    TtsReadingService.PlaybackListener,
+    SettingsBottomSheetDialogFragment.Host {
+
+    companion object {
+        private const val KEY_IS_IMMERSIVE_FULLSCREEN = "state_is_immersive_fullscreen"
+        private const val KEY_SCROLL_POSITION = "state_scroll_position"
+        private const val KEY_SCROLL_OFFSET = "state_scroll_offset"
+    }
 
     private lateinit var binding: ActivityMainBinding
     private lateinit var contentAdapter: NovelContentAdapter
@@ -53,6 +63,8 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
     private var availableVoices: List<Voice> = emptyList()
     private var pendingSavedProgress: SavedReadingProgress? = null
     private var isImmersiveFullScreen: Boolean = true
+    private var pendingScrollPosition: Int = RecyclerView.NO_POSITION
+    private var pendingScrollOffset: Int = 0
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
@@ -71,6 +83,7 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
                 if (!activeTitle.isNullOrBlank()) {
                     binding.toolbar.title = activeTitle
                 }
+                ttsService?.settings?.let { contentAdapter.setFontSizeSp(it.fontSizeSp) }
                 updatePlaybackControls(ttsService?.playbackState ?: TtsReadingService.PlaybackState.IDLE)
                 updateSettingsBadges()
             }
@@ -191,8 +204,17 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        progressManager = ReadingProgressManager(this)
+        val initialSettings = progressManager.loadSettings()
+        ThemeManager.applyThemeMode(initialSettings.themeMode)
+
         super.onCreate(savedInstanceState)
         volumeControlStream = AudioManager.STREAM_MUSIC
+
+        isImmersiveFullScreen = savedInstanceState?.getBoolean(KEY_IS_IMMERSIVE_FULLSCREEN, true) ?: true
+        pendingScrollPosition = savedInstanceState?.getInt(KEY_SCROLL_POSITION, RecyclerView.NO_POSITION)
+            ?: RecyclerView.NO_POSITION
+        pendingScrollOffset = savedInstanceState?.getInt(KEY_SCROLL_OFFSET, 0) ?: 0
 
         // 啟用 Edge-to-Edge 全螢幕佈局，隱藏頂部 status bar 與底部 navigation bar
         WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -201,17 +223,31 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
         setContentView(binding.root)
 
         setupWindowInsets()
-        applyImmersiveSystemBars(hide = true)
+        applyImmersiveSystemBars(hide = isImmersiveFullScreen)
 
         repository = NovelRepository(this)
-        progressManager = ReadingProgressManager(this)
         bookLibraryManager = BookLibraryManager(this)
 
         checkNotificationPermission()
-        setupRecyclerView()
+        setupRecyclerView(initialSettings.fontSizeSp)
         setupListeners()
+        updateSettingsBadges()
         bindTtsService()
-        checkResumeProgress()
+        if (savedInstanceState == null) {
+            checkResumeProgress()
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean(KEY_IS_IMMERSIVE_FULLSCREEN, isImmersiveFullScreen)
+        val lm = binding.rvContent.layoutManager as? LinearLayoutManager
+        val firstVisible = lm?.findFirstVisibleItemPosition() ?: RecyclerView.NO_POSITION
+        if (firstVisible != RecyclerView.NO_POSITION && contentAdapter.itemCount > 0) {
+            val topOffset = lm?.findViewByPosition(firstVisible)?.top ?: 0
+            outState.putInt(KEY_SCROLL_POSITION, firstVisible)
+            outState.putInt(KEY_SCROLL_OFFSET, topOffset)
+        }
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -272,6 +308,9 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
         val windowInsetsController = WindowCompat.getInsetsController(window, window.decorView)
         windowInsetsController.systemBarsBehavior =
             WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        val isDark = ThemeManager.isNightModeActive(this)
+        windowInsetsController.isAppearanceLightStatusBars = !isDark
+        windowInsetsController.isAppearanceLightNavigationBars = !isDark
 
         if (hide) {
             windowInsetsController.hide(WindowInsetsCompat.Type.systemBars())
@@ -300,7 +339,7 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
         bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
     }
 
-    private fun setupRecyclerView() {
+    private fun setupRecyclerView(initialFontSizeSp: Float) {
         contentAdapter = NovelContentAdapter(
             onItemClick = { uiPosition ->
                 ttsService?.seekToUiPosition(uiPosition)
@@ -310,7 +349,8 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
             },
             onNextChapterClick = {
                 ttsService?.playNextChapter()
-            }
+            },
+            initialFontSizeSp = initialFontSizeSp
         )
         binding.rvContent.layoutManager = LinearLayoutManager(this)
         binding.rvContent.adapter = contentAdapter
@@ -381,17 +421,13 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
             sheet.show(supportFragmentManager, "ChapterListSheet")
         }
 
-        // 設定 BottomSheet
+        // 設定 BottomSheet（外觀主題、字體大小、語音與章節設定）
         binding.btnSettings.setOnClickListener {
-            val service = ttsService ?: return@setOnClickListener
-            val sheet = SettingsBottomSheetDialogFragment(
-                settings = service.settings,
-                availableVoices = availableVoices
-            ) { newSettings ->
-                service.updateSettings(newSettings)
-                updateSettingsBadges()
+            if (supportFragmentManager.findFragmentByTag(SettingsBottomSheetDialogFragment.TAG) != null) {
+                return@setOnClickListener
             }
-            sheet.show(supportFragmentManager, "SettingsSheet")
+            SettingsBottomSheetDialogFragment.newInstance()
+                .show(supportFragmentManager, SettingsBottomSheetDialogFragment.TAG)
         }
 
         // 切換沉浸全螢幕 (隱藏 / 顯示頂部 status bar 與底部 navigation bar)
@@ -713,9 +749,29 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
         }
     }
 
+    // --- SettingsBottomSheetDialogFragment.Host 回呼 ---
+
+    override fun getCurrentReadingSettings(): ReadingSettings {
+        return (ttsService?.settings ?: progressManager.loadSettings()).deepCopy()
+    }
+
+    override fun getAvailableTtsVoices(): List<Voice> = availableVoices
+
+    override fun onReadingSettingsChanged(newSettings: ReadingSettings) {
+        val normalized = newSettings.deepCopy()
+        val service = ttsService
+        if (service != null) {
+            service.updateSettings(normalized)
+        } else {
+            progressManager.saveSettings(normalized)
+        }
+        contentAdapter.setFontSizeSp(normalized.fontSizeSp)
+        updateSettingsBadges()
+        ThemeManager.applyThemeMode(normalized.themeMode)
+    }
+
     private fun updateSettingsBadges() {
-        val service = ttsService ?: return
-        val settings = service.settings
+        val settings = ttsService?.settings ?: progressManager.loadSettings()
 
         val modeText = if (settings.filterConfig.readChapterTitle) {
             getString(R.string.mode_title_and_body)
@@ -793,6 +849,17 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
             if (initialSegmentIndex in segments.indices) {
                 val targetSegment = segments[initialSegmentIndex]
                 contentAdapter.setActiveUiPosition(targetSegment.uiPosition)
+            }
+
+            if (pendingScrollPosition != RecyclerView.NO_POSITION) {
+                val pos = pendingScrollPosition.coerceIn(0, maxOf(0, contentAdapter.itemCount - 1))
+                val offset = pendingScrollOffset
+                pendingScrollPosition = RecyclerView.NO_POSITION
+                pendingScrollOffset = 0
+                (binding.rvContent.layoutManager as? LinearLayoutManager)
+                    ?.scrollToPositionWithOffset(pos, offset)
+            } else if (initialSegmentIndex in segments.indices) {
+                val targetSegment = segments[initialSegmentIndex]
                 val itemIdx = contentAdapter.getItemIndexByUiPosition(targetSegment.uiPosition)
                 if (itemIdx != -1) {
                     binding.rvContent.scrollToPosition(itemIdx)
@@ -829,6 +896,9 @@ class MainActivity : AppCompatActivity(), TtsReadingService.PlaybackListener {
     override fun onTtsReady(availableVoices: List<Voice>) {
         runOnUiThread {
             this.availableVoices = availableVoices
+            val settingsSheet = supportFragmentManager
+                .findFragmentByTag(SettingsBottomSheetDialogFragment.TAG) as? SettingsBottomSheetDialogFragment
+            settingsSheet?.updateAvailableVoices(availableVoices)
         }
     }
 

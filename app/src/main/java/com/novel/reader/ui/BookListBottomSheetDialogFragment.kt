@@ -4,9 +4,9 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
-import androidx.appcompat.app.AlertDialog
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.novel.reader.databinding.BottomSheetBookListBinding
 import com.novel.reader.model.BookEntry
 
@@ -18,9 +18,18 @@ class BookListBottomSheetDialogFragment(
     private val onAddBook: () -> Unit
 ) : BottomSheetDialogFragment() {
 
+    constructor() : this({ emptyList() }, { null }, {}, {}, {})
+
     private var _binding: BottomSheetBookListBinding? = null
     private val binding get() = _binding!!
     private lateinit var adapter: BookListAdapter
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        if (savedInstanceState != null) {
+            dismissAllowingStateLoss()
+        }
+    }
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -81,7 +90,7 @@ class BookListBottomSheetDialogFragment(
             }
         }.trim()
 
-        AlertDialog.Builder(requireContext())
+        MaterialAlertDialogBuilder(requireContext())
             .setTitle(book.title)
             .setMessage(infoText)
             .setPositiveButton("開始閱讀") { _, _ ->
@@ -96,7 +105,7 @@ class BookListBottomSheetDialogFragment(
     }
 
     private fun confirmDelete(book: BookEntry) {
-        AlertDialog.Builder(requireContext())
+        MaterialAlertDialogBuilder(requireContext())
             .setTitle("刪除書單項目")
             .setMessage("確定要從書單刪除「${book.title}」嗎？")
             .setPositiveButton("刪除") { _, _ ->
