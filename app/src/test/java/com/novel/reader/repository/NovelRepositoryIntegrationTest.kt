@@ -9,13 +9,21 @@ class NovelRepositoryIntegrationTest {
 
     private val novelRootDir = File("/home/wade/src/github/novel")
 
-    private fun scanLocalNovel(novelDir: File): List<Pair<Int, String>> {
-        val chaptersDir = if (File(novelDir, "chapters").isDirectory) File(novelDir, "chapters") else novelDir
-        val result = mutableListOf<Pair<Int, String>>()
+    private fun scanLocalNovel(novelDir: File): List<Pair<Int, String>> =
+        scanLocalNovelWithVolume(novelDir).map { it.second to it.third }
 
-        fun scan(file: File) {
+    /** 回傳 (卷序, 章號, 章名)，排序方式與 NovelRepository 相同：先卷序、再章號 */
+    private fun scanLocalNovelWithVolume(novelDir: File): List<Triple<Int, Int, String>> {
+        val chaptersDir = if (File(novelDir, "chapters").isDirectory) File(novelDir, "chapters") else novelDir
+        val result = mutableListOf<Triple<Int, Int, String>>()
+
+        fun scan(file: File, volIndex: Int) {
             if (file.isDirectory) {
-                file.listFiles()?.forEach { scan(it) }
+                val name = file.name
+                val vIdx = if (name.contains("volume", ignoreCase = true) || name.startsWith("vol", ignoreCase = true) || name.matches(Regex("""^0*\d+$"""))) {
+                    name.replace(Regex("""[^0-9]"""), "").toIntOrNull() ?: volIndex
+                } else volIndex
+                file.listFiles()?.forEach { scan(it, vIdx) }
             } else if (file.isFile && (file.name.endsWith(".md") || file.name.endsWith(".txt"))) {
                 val lower = file.name.lowercase()
                 if (lower.contains("rules") || lower.contains("outline") || lower.contains("readme") ||
@@ -41,12 +49,12 @@ class NovelRepositoryIntegrationTest {
                     }
                 }
                 if (title.isEmpty()) title = "第 $num 章"
-                result.add(num to title)
+                result.add(Triple(volIndex, num, title))
             }
         }
 
-        scan(chaptersDir)
-        result.sortBy { it.first }
+        scan(chaptersDir, 1)
+        result.sortWith(compareBy({ it.first }, { it.second }))
         return result
     }
 
@@ -77,15 +85,17 @@ class NovelRepositoryIntegrationTest {
     fun testSexChapters() {
         val sexDir = File(novelRootDir, "sex")
         if (!sexDir.exists()) return
-        val chapters = scanLocalNovel(sexDir)
+        val chapters = scanLocalNovelWithVolume(sexDir)
         assertTrue("sex 章節數應至少 88 章，實際為 ${chapters.size}", chapters.size >= 88)
-        assertEquals((1..chapters.size).toList(), chapters.map { it.first })
-        assertTrue(chapters[0].second.contains("宿慧登樓"))
-        assertTrue(chapters[15].second.contains("雷霆滌城"))
-        assertTrue(chapters[16].second.contains("穿門踏虛"))
-        assertTrue(chapters[51].second.contains("雪峰定錨"))
-        assertTrue(chapters[52].second.contains("演武初試"))
-        assertTrue(chapters[87].second.contains("九曜起程"))
+        // 各卷獨立計數：每卷章號皆由 1 連續遞增，且卷與卷之間不可交錯
+        val byVolume = chapters.groupBy { it.first }
+        assertEquals(byVolume.keys.sorted(), chapters.map { it.first }.distinct())
+        byVolume.forEach { (vol, list) ->
+            assertEquals("第 $vol 卷章號應連續", (1..list.size).toList(), list.map { it.second })
+        }
+        assertTrue(byVolume.getValue(1).first().third.contains("宿慧登樓"))
+        assertTrue(byVolume.getValue(2).first().third.contains("穿門踏虛"))
+        assertTrue(byVolume.getValue(3).first().third.contains("演武初試"))
     }
 
     @Test

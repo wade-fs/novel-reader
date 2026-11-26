@@ -368,7 +368,8 @@ object GitHubHelper {
             }
 
             scan(searchDir, 1, "第一卷")
-            chapters.sortBy { it.chapterNumber }
+            // 先依卷序再依章號排序（支援「各卷獨立計數」的章節編號）
+            chapters.sortWith(compareBy<Chapter>({ it.volumeIndex }, { it.chapterNumber }))
 
             if (chapters.isEmpty()) {
                 destDir.deleteRecursively()

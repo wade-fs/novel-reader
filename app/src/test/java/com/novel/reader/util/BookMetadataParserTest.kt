@@ -127,6 +127,7 @@ class BookMetadataParserTest {
                 "sex.zip" to Pair("萬界風月樓", 88),
                 "ming.zip" to Pair("明末清初歷史小說", 1)
             )
+            val inProgressZips = setOf("sex.zip")
             for ((zipName, expectedPair) in expectedZips) {
                 val zipFile = File(assetsDir, zipName)
                 assertTrue("Missing asset zip: $zipName", zipFile.exists())
@@ -134,7 +135,15 @@ class BookMetadataParserTest {
                     ArchiveHelper.inspectZipBookSummary(it, fallbackTitle = zipName.removeSuffix(".zip"))
                 }
                 assertEquals("Title mismatch for $zipName", expectedPair.first, summary.metadata.title)
-                assertEquals("Chapter count mismatch for $zipName", expectedPair.second, summary.chapterCount)
+                if (zipName in inProgressZips) {
+                    // 連載中的書籍章節數會持續增加，只檢查下限
+                    assertTrue(
+                        "Chapter count for $zipName should be >= ${expectedPair.second}, was ${summary.chapterCount}",
+                        summary.chapterCount >= expectedPair.second
+                    )
+                } else {
+                    assertEquals("Chapter count mismatch for $zipName", expectedPair.second, summary.chapterCount)
+                }
                 assertTrue("Subtitle should be present for $zipName", summary.metadata.subtitle.isNotBlank())
                 assertTrue("Tags should be present for $zipName", summary.metadata.tags.isNotEmpty())
             }

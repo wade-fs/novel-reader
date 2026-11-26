@@ -234,7 +234,8 @@ class NovelRepository(private val context: Context) {
         }
 
         scanFolder(scanTarget, 1, "目錄")
-        chapters.sortBy { it.chapterNumber }
+        // 先依卷序再依章號排序（支援「各卷獨立計數」的章節編號）
+        chapters.sortWith(compareBy<Chapter>({ it.volumeIndex }, { it.chapterNumber }))
         if (chapters.isNotEmpty()) {
             val meta = BookMetadataParser.findMetadataInDocumentDir(rootDoc, context) ?: BookMetadata()
             val resolvedTitle = meta.title.ifBlank { rootDoc.name ?: "外部小說目錄" }
@@ -299,7 +300,8 @@ class NovelRepository(private val context: Context) {
         }
 
         scan(searchDir, 1, "第一卷")
-        chapters.sortBy { it.chapterNumber }
+        // 先依卷序再依章號排序（支援「各卷獨立計數」的章節編號）
+        chapters.sortWith(compareBy<Chapter>({ it.volumeIndex }, { it.chapterNumber }))
         return chapters
     }
 

@@ -13,6 +13,8 @@ import android.os.Bundle
 import android.os.IBinder
 import android.os.PowerManager
 import android.provider.OpenableColumns
+import android.provider.Settings
+import android.view.HapticFeedbackConstants
 import android.speech.tts.Voice
 import android.view.KeyEvent
 import android.view.View
@@ -65,6 +67,12 @@ class MainActivity : AppCompatActivity(),
     private var isImmersiveFullScreen: Boolean = true
     private var pendingScrollPosition: Int = RecyclerView.NO_POSITION
     private var pendingScrollOffset: Int = 0
+    private var dragStartBrightness: Float = 0.5f
+    private var dragStartSpeechRate: Float = 1.0f
+    private var dragSpeechRate: Float = 1.0f
+    private val hideGestureIndicatorRunnable = Runnable {
+        binding.cardGestureIndicator.visibility = View.GONE
+    }
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
@@ -342,13 +350,21 @@ class MainActivity : AppCompatActivity(),
     private fun setupRecyclerView(initialFontSizeSp: Float) {
         contentAdapter = NovelContentAdapter(
             onItemClick = { uiPosition ->
-                ttsService?.seekToUiPosition(uiPosition)
+                val service = ttsService
+                if (service != null) {
+                    // 停止狀態下點擊內文不自動播放；暫停狀態則從點擊段落繼續朗讀
+                    if (service.playbackState == TtsReadingService.PlaybackState.IDLE) {
+                        binding.tvSpeakingStatus.text = getString(R.string.status_stopped_tap_hint)
+                    } else {
+                        service.seekToUiPosition(uiPosition)
+                    }
+                }
             },
             onPrevChapterClick = {
-                ttsService?.playPreviousChapter()
+                switchChapter(forward = false)
             },
             onNextChapterClick = {
-                ttsService?.playNextChapter()
+                switchChapter(forward = true)
             },
             initialFontSizeSp = initialFontSizeSp
         )
@@ -375,7 +391,7 @@ class MainActivity : AppCompatActivity(),
             showImportSheet()
         }
 
-        // 播放 / 暫停 大按鈕
+        // Play / Pause 大按鈕：點擊切換播放 / 暫停，長按停止
         binding.fabPlayPause.setOnClickListener {
             val service = ttsService ?: return@setOnClickListener
             if (service.playbackState == TtsReadingService.PlaybackState.PLAYING) {
@@ -384,26 +400,17 @@ class MainActivity : AppCompatActivity(),
                 service.play()
             }
         }
-
-        // 快速切換：上一章
-        binding.btnPrevChapter.setOnClickListener {
-            ttsService?.playPreviousChapter()
+        binding.fabPlayPause.setOnLongClickListener { view ->
+            val service = ttsService ?: return@setOnLongClickListener false
+            view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+            if (service.playbackState != TtsReadingService.PlaybackState.IDLE) {
+                service.stop()
+                Toast.makeText(this, R.string.toast_playback_stopped, Toast.LENGTH_SHORT).show()
+            }
+            true
         }
 
-        // 快速切換：下一章
-        binding.btnNextChapter.setOnClickListener {
-            ttsService?.playNextChapter()
-        }
-
-        // 上一段
-        binding.btnPrevParagraph.setOnClickListener {
-            ttsService?.previousSegment()
-        }
-
-        // 下一段
-        binding.btnNextParagraph.setOnClickListener {
-            ttsService?.nextSegment()
-        }
+        setupPlayerGestures()
 
         // 章節目錄 BottomSheet
         binding.btnChapterList.setOnClickListener {
@@ -460,6 +467,115 @@ class MainActivity : AppCompatActivity(),
         binding.btnCloseResumeBanner.setOnClickListener {
             binding.cardResumeBanner.visibility = View.GONE
         }
+    }
+
+    private fun setupPlayerGestures() {
+        binding.playerGestureArea.anchorView = binding.fabPlayPause
+        binding.playerGestureArea.listener = object : PlayerGestureLayout.Listener {
+            override fun onSwipeSegment(forward: Boolean) {
+                val service = ttsService ?: return
+                if (service.chapters.isEmpty()) return
+                binding.playerGestureArea.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                // 停止狀態只移動位置不發聲；暫停 / 播放狀態移動後朗讀
+                val autoPlay = service.playbackState != TtsReadingService.PlaybackState.IDLE
+                service.stepSegment(forward, autoPlay)
+                showGestureIndicator(
+                    getString(if (forward) R.string.gesture_next_segment else R.string.gesture_prev_segment),
+                    autoHide = true
+                )
+            }
+
+            override fun onSwipeChapter(forward: Boolean) {
+                val service = ttsService ?: return
+                if (service.chapters.isEmpty()) return
+                binding.playerGestureArea.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                val text = when {
+                    switchChapter(forward) ->
+                        if (forward) R.string.gesture_next_chapter else R.string.gesture_prev_chapter
+                    forward -> R.string.gesture_no_next_chapter
+                    else -> R.string.gesture_no_prev_chapter
+                }
+                showGestureIndicator(getString(text), autoHide = true)
+            }
+
+            override fun onVerticalDragStart(leftSide: Boolean) {
+                if (leftSide) {
+                    dragStartBrightness = currentWindowBrightness()
+                    showBrightnessIndicator(dragStartBrightness)
+                } else {
+                    dragStartSpeechRate = getCurrentReadingSettings().speechRate
+                    dragSpeechRate = dragStartSpeechRate
+                    showGestureIndicator(getString(R.string.gesture_speed, dragSpeechRate), autoHide = false)
+                }
+            }
+
+            override fun onVerticalDrag(leftSide: Boolean, fraction: Float) {
+                if (leftSide) {
+                    val brightness = (dragStartBrightness + fraction).coerceIn(0.01f, 1f)
+                    val lp = window.attributes
+                    lp.screenBrightness = brightness
+                    window.attributes = lp
+                    showBrightnessIndicator(brightness)
+                } else {
+                    val raw = (dragStartSpeechRate + fraction * 2f).coerceIn(0.5f, 2.5f)
+                    dragSpeechRate = (Math.round(raw * 20f) / 20f).coerceIn(0.5f, 2.5f)
+                    showGestureIndicator(getString(R.string.gesture_speed, dragSpeechRate), autoHide = false)
+                }
+            }
+
+            override fun onVerticalDragEnd(leftSide: Boolean) {
+                if (!leftSide && dragSpeechRate != dragStartSpeechRate) {
+                    val newSettings = getCurrentReadingSettings()
+                    newSettings.speechRate = dragSpeechRate
+                    onReadingSettingsChanged(newSettings)
+                }
+                scheduleHideGestureIndicator()
+            }
+        }
+    }
+
+    /**
+     * 切換上/下一章：停止狀態只載入章節不發聲，暫停 / 播放狀態則自動朗讀。
+     * @return 是否有可切換的章節
+     */
+    private fun switchChapter(forward: Boolean): Boolean {
+        val service = ttsService ?: return false
+        val target = service.currentChapterIndex + if (forward) 1 else -1
+        if (target !in service.chapters.indices) return false
+        if (service.playbackState == TtsReadingService.PlaybackState.IDLE) {
+            service.loadChapter(target, autoPlay = false)
+        } else if (forward) {
+            service.playNextChapter()
+        } else {
+            service.playPreviousChapter()
+        }
+        return true
+    }
+
+    private fun currentWindowBrightness(): Float {
+        val current = window.attributes.screenBrightness
+        if (current >= 0f) return current
+        return try {
+            Settings.System.getInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS) / 255f
+        } catch (_: Exception) {
+            0.5f
+        }.coerceIn(0.01f, 1f)
+    }
+
+    private fun showBrightnessIndicator(brightness: Float) {
+        showGestureIndicator(getString(R.string.gesture_brightness, Math.round(brightness * 100)), autoHide = false)
+    }
+
+    private fun showGestureIndicator(text: String, autoHide: Boolean) {
+        binding.tvGestureIndicator.text = text
+        binding.cardGestureIndicator.removeCallbacks(hideGestureIndicatorRunnable)
+        binding.cardGestureIndicator.visibility = View.VISIBLE
+        if (autoHide) scheduleHideGestureIndicator()
+    }
+
+    private fun scheduleHideGestureIndicator() {
+        binding.cardGestureIndicator.removeCallbacks(hideGestureIndicatorRunnable)
+        binding.cardGestureIndicator.postDelayed(hideGestureIndicatorRunnable, 800L)
     }
 
     private fun showBookListSheet() {
@@ -796,15 +912,6 @@ class MainActivity : AppCompatActivity(),
             android.R.drawable.ic_media_play
         }
         binding.fabPlayPause.setImageResource(icon)
-
-        val service = ttsService
-        if (service != null) {
-            binding.btnPrevChapter.isEnabled = service.currentChapterIndex > 0
-            binding.btnNextChapter.isEnabled = service.currentChapterIndex < service.chapters.size - 1
-        } else {
-            binding.btnPrevChapter.isEnabled = false
-            binding.btnNextChapter.isEnabled = false
-        }
     }
 
     // --- TtsReadingService.PlaybackListener 回呼 ---
@@ -817,13 +924,13 @@ class MainActivity : AppCompatActivity(),
                     binding.cardResumeBanner.visibility = View.GONE
                 }
                 TtsReadingService.PlaybackState.PAUSED -> {
-                    binding.tvSpeakingStatus.text = "朗讀已暫停，點擊播放繼續"
+                    binding.tvSpeakingStatus.text = getString(R.string.status_paused)
                 }
                 TtsReadingService.PlaybackState.IDLE -> {
                     if (ttsService?.chapters.isNullOrEmpty()) {
                         binding.tvSpeakingStatus.text = "點擊右上角書單或匯入按鈕新增小說"
                     } else {
-                        binding.tvSpeakingStatus.text = "準備就緒，點擊播放開始朗讀"
+                        binding.tvSpeakingStatus.text = getString(R.string.status_ready)
                     }
                     contentAdapter.setActiveUiPosition(-1)
                 }
@@ -876,7 +983,12 @@ class MainActivity : AppCompatActivity(),
             if (segment != null) {
                 contentAdapter.setActiveUiPosition(segment.uiPosition)
                 val preview = segment.displayText.replace("\n", " ").trim()
-                binding.tvSpeakingStatus.text = "正在朗讀：$preview"
+                binding.tvSpeakingStatus.text =
+                    if (ttsService?.playbackState == TtsReadingService.PlaybackState.IDLE) {
+                        getString(R.string.status_stopped_at, preview)
+                    } else {
+                        "正在朗讀：$preview"
+                    }
 
                 val itemIdx = contentAdapter.getItemIndexByUiPosition(segment.uiPosition)
                 if (itemIdx != -1) {

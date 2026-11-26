@@ -14,6 +14,7 @@ import com.novel.reader.databinding.BottomSheetSettingsBinding
 import com.novel.reader.model.AppThemeMode
 import com.novel.reader.model.ReadingSettings
 import com.novel.reader.model.VoiceGender
+import com.novel.reader.service.TtsReadingService
 import kotlin.math.roundToInt
 
 class SettingsBottomSheetDialogFragment : BottomSheetDialogFragment() {
@@ -36,6 +37,7 @@ class SettingsBottomSheetDialogFragment : BottomSheetDialogFragment() {
     private val binding get() = _binding!!
     private var settings: ReadingSettings = ReadingSettings()
     private var availableVoices: List<Voice> = emptyList()
+    private var filteredVoices: List<Voice> = emptyList()
     private var isUpdatingUi = false
     private var lastSpinnerPosition: Int = 0
 
@@ -143,12 +145,25 @@ class SettingsBottomSheetDialogFragment : BottomSheetDialogFragment() {
         // 3. 語音性別 (男生 / 女生 / 預設)
         binding.chipGroupGender.setOnCheckedStateChangeListener { _, checkedIds ->
             if (isUpdatingUi) return@setOnCheckedStateChangeListener
-            settings.gender = when (checkedIds.firstOrNull()) {
+            val newGender = when (checkedIds.firstOrNull()) {
                 R.id.chipGenderMale -> VoiceGender.MALE
                 R.id.chipGenderFemale -> VoiceGender.FEMALE
                 else -> VoiceGender.DEFAULT
             }
-            notifyChange()
+            if (settings.gender != newGender) {
+                settings.gender = newGender
+                if (newGender == VoiceGender.DEFAULT) {
+                    settings.selectedVoiceName = null
+                } else if (settings.selectedVoiceName != null) {
+                    val currentVoice = availableVoices.find { it.name == settings.selectedVoiceName }
+                    val excluded = if (newGender == VoiceGender.MALE) VoiceGender.FEMALE else VoiceGender.MALE
+                    if (currentVoice == null || TtsReadingService.detectVoiceGender(currentVoice) == excluded) {
+                        settings.selectedVoiceName = null
+                    }
+                }
+                bindVoicesSpinner()
+                notifyChange()
+            }
         }
 
         // 語調 Slider
@@ -169,7 +184,7 @@ class SettingsBottomSheetDialogFragment : BottomSheetDialogFragment() {
                 if (position == 0) {
                     settings.selectedVoiceName = null
                 } else {
-                    settings.selectedVoiceName = availableVoices.getOrNull(position - 1)?.name
+                    settings.selectedVoiceName = filteredVoices.getOrNull(position - 1)?.name
                 }
                 notifyChange()
             }
@@ -205,8 +220,28 @@ class SettingsBottomSheetDialogFragment : BottomSheetDialogFragment() {
     private fun bindVoicesSpinner() {
         val wasUpdating = isUpdatingUi
         isUpdatingUi = true
-        val voiceNames = mutableListOf("🇹🇼 系統預設語音 (優先台灣口音)")
-        voiceNames.addAll(availableVoices.map { formatVoiceLabel(it) })
+
+        // 系統預設時不必再選語音，直接隱藏下拉清單
+        if (settings.gender == VoiceGender.DEFAULT) {
+            filteredVoices = emptyList()
+            binding.spinnerVoices.visibility = View.GONE
+            isUpdatingUi = wasUpdating
+            return
+        }
+
+        binding.spinnerVoices.visibility = View.VISIBLE
+        val excludedGender = if (settings.gender == VoiceGender.MALE) VoiceGender.FEMALE else VoiceGender.MALE
+        filteredVoices = availableVoices.filter { v ->
+            TtsReadingService.detectVoiceGender(v) != excludedGender
+        }
+
+        val defaultLabel = if (settings.gender == VoiceGender.MALE) {
+            "🇹🇼 自動選取男聲 (優先台灣口音)"
+        } else {
+            "🇹🇼 自動選取女聲 (優先台灣口音)"
+        }
+        val voiceNames = mutableListOf(defaultLabel)
+        voiceNames.addAll(filteredVoices.map { formatVoiceLabel(it) })
         val voiceAdapter = ArrayAdapter(
             requireContext(),
             R.layout.item_spinner_voice,
@@ -216,7 +251,7 @@ class SettingsBottomSheetDialogFragment : BottomSheetDialogFragment() {
         voiceAdapter.setDropDownViewResource(R.layout.item_spinner_voice)
         binding.spinnerVoices.adapter = voiceAdapter
 
-        val selectedIdx = availableVoices.indexOfFirst { it.name == settings.selectedVoiceName }
+        val selectedIdx = filteredVoices.indexOfFirst { it.name == settings.selectedVoiceName }
         val targetPos = if (selectedIdx != -1) selectedIdx + 1 else 0
         lastSpinnerPosition = targetPos
         binding.spinnerVoices.setSelection(targetPos, false)
@@ -304,10 +339,10 @@ class SettingsBottomSheetDialogFragment : BottomSheetDialogFragment() {
         val n = v.name.lowercase()
         val loc = v.locale
         val isTw = loc.country.equals("TW", true) || loc.toLanguageTag().contains("TW", true) || n.contains("tw")
-        val gender = when {
-            n.contains("female") || n.contains("woman") || n.contains("ctd") || n.contains("cta") -> "女聲"
-            n.contains("male") || n.contains("man") || n.contains("ctc") || n.contains("ctb") -> "男聲"
-            else -> "預設"
+        val gender = when (TtsReadingService.detectVoiceGender(v)) {
+            VoiceGender.FEMALE -> "女聲"
+            VoiceGender.MALE -> "男聲"
+            VoiceGender.DEFAULT -> "預設"
         }
         return if (isTw) {
             "🇹🇼 台灣 ($gender) · ${v.name}"

@@ -59,6 +59,22 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
         const val ACTION_STOP = "com.novel.reader.ACTION_STOP"
 
         val TAIWAN_LOCALE = Locale("zh", "TW")
+
+        /**
+         * 判斷語音性別。
+         * Google TTS 台灣中文：ctc / cte / ctf / cta 為女聲；ctd / ctb 為男聲。
+         * 先比對 female 再比對 male，避免 "female" 被 "male" 誤判。
+         */
+        fun detectVoiceGender(v: Voice): VoiceGender {
+            val n = v.name.lowercase()
+            return when {
+                n.contains("female") || n.contains("woman") ||
+                    n.contains("ctc") || n.contains("cte") || n.contains("ctf") || n.contains("cta") -> VoiceGender.FEMALE
+                n.contains("male") || n.contains("man") ||
+                    n.contains("ctd") || n.contains("ctb") -> VoiceGender.MALE
+                else -> VoiceGender.DEFAULT
+            }
+        }
     }
 
     enum class PlaybackState {
@@ -1131,6 +1147,31 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
     }
 
     /**
+     * 手勢切換段落：autoPlay = false 時只移動朗讀位置不發聲（停止狀態使用）；
+     * autoPlay = true 時移動後開始/繼續朗讀（暫停狀態會自動恢復播放）。
+     * 超出本章範圍時切換至上/下一章。
+     */
+    fun stepSegment(forward: Boolean, autoPlay: Boolean) {
+        val target = currentSegmentIndex + if (forward) 1 else -1
+        if (target in currentSegments.indices) {
+            currentSegmentIndex = target
+            if (!autoPlay) {
+                saveCurrentProgress()
+                notifySegmentChanged(currentSegmentIndex, currentSegments[target])
+            } else if (playbackState == PlaybackState.PLAYING) {
+                speakCurrentSegment()
+            } else {
+                play()
+            }
+        } else {
+            val targetChapter = currentChapterIndex + if (forward) 1 else -1
+            if (targetChapter in chapters.indices) {
+                loadChapter(targetChapter, autoPlay = autoPlay)
+            }
+        }
+    }
+
+    /**
      * 上一章
      */
     fun playPreviousChapter() {
@@ -1199,18 +1240,34 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
         when (settings.gender) {
             VoiceGender.MALE -> {
                 effectivePitch = settings.pitch * 0.88f
-                selectVoiceByGender(isFemale = false)
+                val custom = settings.selectedVoiceName?.let { name ->
+                    getAvailableChineseVoices().find {
+                        it.name == name && detectVoiceGender(it) != VoiceGender.FEMALE
+                    }
+                }
+                if (custom != null) {
+                    val res = t.setVoice(custom)
+                    Log.d("NovelTts", "applyTtsParameters(MALE custom): voice=${custom.name}, res=$res")
+                } else {
+                    selectVoiceByGender(isFemale = false)
+                }
             }
             VoiceGender.FEMALE -> {
                 effectivePitch = settings.pitch * 1.12f
-                selectVoiceByGender(isFemale = true)
+                val custom = settings.selectedVoiceName?.let { name ->
+                    getAvailableChineseVoices().find {
+                        it.name == name && detectVoiceGender(it) != VoiceGender.MALE
+                    }
+                }
+                if (custom != null) {
+                    val res = t.setVoice(custom)
+                    Log.d("NovelTts", "applyTtsParameters(FEMALE custom): voice=${custom.name}, res=$res")
+                } else {
+                    selectVoiceByGender(isFemale = true)
+                }
             }
             VoiceGender.DEFAULT -> {
-                if (settings.selectedVoiceName != null) {
-                    selectVoiceByName(settings.selectedVoiceName!!)
-                } else {
-                    selectDefaultTaiwanVoice()
-                }
+                selectDefaultTaiwanVoice()
             }
         }
         t.setPitch(effectivePitch)
@@ -1221,50 +1278,37 @@ class TtsReadingService : Service(), TextToSpeech.OnInitListener {
      */
     private fun selectVoiceByGender(isFemale: Boolean) {
         val voices = getAvailableChineseVoices()
+        val targetGender = if (isFemale) VoiceGender.FEMALE else VoiceGender.MALE
+        val excludedGender = if (isFemale) VoiceGender.MALE else VoiceGender.FEMALE
 
-        val targetVoice = if (isFemale) {
-            // 1. 優先找台灣女聲 (cmn-tw-x-ctd, female, etc.)
-            voices.find { v ->
-                val n = v.name.lowercase()
-                val isTw = isTaiwanVoice(v)
-                val isFem = n.contains("female") || n.contains("woman") || n.contains("ctd") || n.contains("cta")
-                isTw && isFem
-            } ?: voices.find { v -> isTaiwanVoice(v) } // 2. 任何台灣語音
-            ?: voices.find { v ->
-                val n = v.name.lowercase()
-                n.contains("female") || n.contains("woman") || n.contains("ctd")
-            } ?: voices.firstOrNull()
-        } else {
-            // 1. 優先找台灣男聲 (cmn-tw-x-ctc, male, etc.)
-            voices.find { v ->
-                val n = v.name.lowercase()
-                val isTw = isTaiwanVoice(v)
-                val isMale = n.contains("male") || n.contains("man") || n.contains("ctc") || n.contains("ctb")
-                isTw && isMale
-            } ?: voices.find { v -> isTaiwanVoice(v) } // 2. 任何台灣語音
-            ?: voices.find { v ->
-                val n = v.name.lowercase()
-                n.contains("male") || n.contains("man") || n.contains("ctc")
-            } ?: voices.firstOrNull()
-        }
+        val targetVoice = voices.find { v ->
+            isTaiwanVoice(v) && detectVoiceGender(v) == targetGender
+        } ?: voices.find { v ->
+            isTaiwanVoice(v) && detectVoiceGender(v) != excludedGender
+        } ?: voices.find { v ->
+            detectVoiceGender(v) == targetGender
+        } ?: voices.find { v ->
+            isTaiwanVoice(v)
+        } ?: voices.firstOrNull()
 
         if (targetVoice != null) {
-            tts?.voice = targetVoice
+            val res = tts?.setVoice(targetVoice)
+            Log.d("NovelTts", "selectVoiceByGender(isFemale=$isFemale): voice=${targetVoice.name}, res=$res")
         }
     }
 
     /**
-     * 預設選用台灣標準語音 (以台灣女聲 cmn-tw-x-ctd 或繁體中文優先)
+     * 預設選用台灣標準語音 (以台灣女聲 cmn-tw-x-ctc / cte / ctf 或繁體中文優先)
      */
     fun selectDefaultTaiwanVoice() {
         val voices = getAvailableChineseVoices()
         val twVoice = voices.find { v ->
-            val n = v.name.lowercase()
-            isTaiwanVoice(v) && (n.contains("ctd") || n.contains("female") || n.contains("cta"))
+            isTaiwanVoice(v) && detectVoiceGender(v) == VoiceGender.FEMALE
         } ?: voices.find { v -> isTaiwanVoice(v) }
 
         if (twVoice != null) {
-            tts?.voice = twVoice
+            val res = tts?.setVoice(twVoice)
+            Log.d("NovelTts", "selectDefaultTaiwanVoice: voice=${twVoice.name}, res=$res, totalZhVoices=${voices.size}")
         }
     }
 
