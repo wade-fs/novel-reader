@@ -10,8 +10,8 @@ import kotlin.math.abs
 
 /**
  * 底部播放列手勢容器：
- * - 左右滑動：起點與終點在 Play/Pause 鈕同一側 → 上/下一段；跨過 Play/Pause 鈕 → 上/下一章
- * - 上下滑動：Play/Pause 鈕左側調整亮度，右側調整語速
+ * - Play/Pause 鈕左側：左右滑動 → 上/下一段；上下滑動 → 調整亮度
+ * - Play/Pause 鈕右側：左右滑動 → 上/下一章；上下滑動 → 調整語速
  * 子 View（Play/Pause 鈕）仍可正常接收點擊與長按，滑動超過 touchSlop 後才由本容器攔截。
  */
 class PlayerGestureLayout @JvmOverloads constructor(
@@ -126,12 +126,11 @@ class PlayerGestureLayout @JvmOverloads constructor(
         val dx = upX - downX
         if (abs(dx) < minSwipeDistancePx) return
         val forward = dx > 0
-        val divider = dividerX()
-        val crossed = (downX < divider) != (upX < divider)
-        if (crossed) {
-            listener?.onSwipeChapter(forward)
-        } else {
+        val startedLeft = downX < dividerX()
+        if (startedLeft) {
             listener?.onSwipeSegment(forward)
+        } else {
+            listener?.onSwipeChapter(forward)
         }
     }
 }

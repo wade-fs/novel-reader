@@ -40,7 +40,7 @@
     <string name="toast_playback_stopped">已停止朗讀</string>
     <string name="status_stopped_at">已停止（按播放開始）：%1$s</string>
     <string name="gesture_hint_left">↔ 段落\n↕ 亮度</string>
-    <string name="gesture_hint_right">段落 ↔\n語速 ↕</string>
+    <string name="gesture_hint_right">章節 ↔\n語速 ↕</string>
     <string name="gesture_brightness">☀ 亮度 %1$d%%</string>
     <string name="gesture_speed">🔊 語速 %1$.2fx</string>
     <string name="gesture_next_segment">⏩ 下一段</string>
